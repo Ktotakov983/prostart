@@ -649,6 +649,37 @@ body.light-theme{
   max-width:88vw;
   text-align:center;
 }
+
+.lock-overlay{
+  position:fixed;
+  inset:0;
+  z-index:45;
+  background:transparent;
+  touch-action:none;
+}
+.lock-btn{
+  position:fixed;
+  right:max(10px, env(safe-area-inset-right));
+  top:50%;
+  transform:translateY(-50%);
+  z-index:46;
+  width:44px;
+  height:44px;
+  border-radius:50%;
+  background:var(--panel);
+  border:1px solid var(--panel-border);
+  color:var(--lcd-fg);
+  font-size:19px;
+  cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,.4);
+}
+.lock-btn:active{ background:var(--panel-hi); }
+.lock-btn.active{
+  background:var(--lcd-red);
+  border-color:var(--lcd-red);
+  color:#fff;
+  box-shadow:0 0 0 4px rgba(232,67,63,.25), 0 2px 10px rgba(0,0,0,.4);
+}
 </style>
 </head>
 <body>
@@ -1005,6 +1036,9 @@ body.light-theme{
 
 <div id="toast" class="toast hidden"></div>
 
+<div id="lockOverlay" class="lock-overlay hidden"></div>
+<button id="lockBtn" class="lock-btn" aria-label="Заблокировать экран" title="Заблокировать экран (от капель воды)">🔓</button>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
@@ -1084,6 +1118,7 @@ const state = {
   sessionRegistered: false,
   sessionName: null,
   sessionCreatedAt: null,
+  screenLocked: false,
 };
 
 const $ = id => document.getElementById(id);
@@ -1118,6 +1153,7 @@ const el = {
   logTableBody: $('logTableBody'),
   csvOutput: $('csvOutput'),
   toast: $('toast'),
+  lockBtn: $('lockBtn'), lockOverlay: $('lockOverlay'),
   historyListPage: $('historyListPage'), historyListClose: $('historyListClose'),
   historyListEmpty: $('historyListEmpty'), historyListItems: $('historyListItems'),
   openHistoryListBtn: $('openHistoryListBtn'),
@@ -2341,6 +2377,14 @@ el.openHistoryListBtn.addEventListener('click', () => { location.hash = 'history
 el.btnNight.addEventListener('click', () => {
   document.body.classList.toggle('light-theme');
   showToast(document.body.classList.contains('light-theme') ? 'Светлая тема' : 'Тёмная тема');
+});
+
+el.lockBtn.addEventListener('click', () => {
+  state.screenLocked = !state.screenLocked;
+  el.lockOverlay.classList.toggle('hidden', !state.screenLocked);
+  el.lockBtn.classList.toggle('active', state.screenLocked);
+  el.lockBtn.textContent = state.screenLocked ? '🔒' : '🔓';
+  showToast(state.screenLocked ? 'Экран заблокирован' : 'Экран разблокирован');
 });
 
 el.trimReadout.addEventListener('click', resetTrimAngle);
