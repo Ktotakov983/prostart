@@ -2472,12 +2472,27 @@ function stopVolumeWatch() {
   }
 }
 
+window.__onHardwareVolumeKey = function (direction) {
+  if (!state.screenLocked) return;
+  if (direction === 'up') {
+    pressGun();
+    state.viewOverride = 'start';
+    showToast('Volume+ : GUN');
+  } else if (direction === 'down') {
+    el.btnMode.click();
+    showToast('Volume− : смена режима');
+  }
+};
+
 el.lockBtn.addEventListener('click', () => {
   state.screenLocked = !state.screenLocked;
   el.lockOverlay.classList.toggle('hidden', !state.screenLocked);
   el.lockBtn.classList.toggle('active', state.screenLocked);
   el.lockIconUse.setAttribute('href', state.screenLocked ? '#icon-lock-closed' : '#icon-lock-open');
   showToast(state.screenLocked ? 'Экран заблокирован' : 'Экран разблокирован');
+  if (window.AndroidVolumeBridge) {
+    try { window.AndroidVolumeBridge.setEnabled(state.screenLocked); } catch (err) {}
+  }
   if (state.screenLocked) startVolumeWatch();
   else stopVolumeWatch();
 });
