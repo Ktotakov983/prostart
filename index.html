@@ -2484,6 +2484,34 @@ window.__onHardwareVolumeKey = function (direction) {
   }
 };
 
+// Third best-effort mechanism, stacked alongside the volumechange trick
+// above: some Chrome-on-Android versions forward the hardware volume keys
+// as real 'keydown' events (key: 'AudioVolumeUp'/'AudioVolumeDown') while
+// the page is running in fullscreen or installed as a standalone PWA.
+// This never fires on platforms that don't support it - harmless no-op.
+window.addEventListener('keydown', (e) => {
+  if (!state.screenLocked) return;
+  if (e.key === 'AudioVolumeUp' || e.code === 'VolumeUp' || e.key === 'BrightnessUp') {
+    e.preventDefault();
+    pressGun();
+    state.viewOverride = 'start';
+    showToast('Volume+ : GUN');
+  } else if (e.key === 'AudioVolumeDown' || e.code === 'VolumeDown' || e.key === 'BrightnessDown') {
+    e.preventDefault();
+    el.btnMode.click();
+    showToast('Volume− : смена режима');
+  }
+});
+
+function enterLockFullscreen() {
+  if (document.fullscreenElement) return;
+  try {
+    (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)
+      ?.call(document.documentElement)
+      .catch(() => {});
+  } catch (err) {}
+}
+
 el.lockBtn.addEventListener('click', () => {
   state.screenLocked = !state.screenLocked;
   el.lockOverlay.classList.toggle('hidden', !state.screenLocked);
@@ -2493,7 +2521,7 @@ el.lockBtn.addEventListener('click', () => {
   if (window.AndroidVolumeBridge) {
     try { window.AndroidVolumeBridge.setEnabled(state.screenLocked); } catch (err) {}
   }
-  if (state.screenLocked) startVolumeWatch();
+  if (state.screenLocked) { startVolumeWatch(); enterLockFullscreen(); }
   else stopVolumeWatch();
 });
 
