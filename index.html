@@ -2447,13 +2447,29 @@ function startVolumeWatch() {
       volumeWatchAudio.addEventListener('volumechange', onVolumeWatchChange);
     }
     volumeWatchAudio.volume = VOLUME_WATCH_BASELINE;
-    volumeWatchAudio.play().catch(() => {});
+    volumeWatchAudio.play().then(() => {
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({ title: 'ProStart — блокировка экрана' });
+          navigator.mediaSession.playbackState = 'playing';
+          navigator.mediaSession.setActionHandler('play', () => {
+            volumeWatchAudio.play().catch(() => {});
+            navigator.mediaSession.playbackState = 'playing';
+          });
+          navigator.mediaSession.setActionHandler('pause', () => {});
+        } catch (err) {
+        }
+      }
+    }).catch(() => {});
   } catch (err) {
   }
 }
 
 function stopVolumeWatch() {
   if (volumeWatchAudio) volumeWatchAudio.pause();
+  if ('mediaSession' in navigator) {
+    try { navigator.mediaSession.playbackState = 'paused'; } catch (err) {}
+  }
 }
 
 el.lockBtn.addEventListener('click', () => {
