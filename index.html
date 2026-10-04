@@ -906,12 +906,13 @@ body.light-theme{
         <div class="menu-row">
           <label>Источник курса</label>
           <select id="headingSourceSelect">
-            <option value="gps">GPS (Course Over Ground)</option>
-            <option value="compass">Компас телефона</option>
+            <option value="auto" selected>Авто (компас на малой скорости, GPS на большой)</option>
+            <option value="gps">Только GPS (Course Over Ground)</option>
+            <option value="compass">Только компас телефона</option>
           </select>
         </div>
         <div class="menu-row">
-          <label>Смещение курса, ° (если телефон закреплён не носом вперёд)</label>
+          <label>Ручное смещение курса, ° (в режиме «Авто» поправку подбирает GPS сам)</label>
           <input type="number" id="headingOffset" min="-180" max="180" step="1" placeholder="0">
         </div>
         <div class="menu-row">
@@ -924,9 +925,15 @@ body.light-theme{
           </select>
         </div>
         <div class="menu-row menu-readout">
-          GPS работает только в движении. Компас телефона показывает курс и стоя на месте,
-          но зависит от того, как именно закреплён телефон — подберите смещение так, чтобы
-          курс совпадал с реальным направлением носа лодки.
+          <b>Авто:</b> до ~2 уз курс берётся с компаса телефона, от ~5 уз — из GPS,
+          между ними плавный переход. Каждый раз, когда лодка идёт быстрее ~3 уз,
+          приложение сравнивает курс GPS с компасом и подстраивает поправку компаса
+          (учитывает, как закреплён телефон, и магнитное склонение). Поэтому первое
+          время после запуска компас может врать — пройдите пару минут на ходу, и
+          поправка откалибруется (состояние видно в «GPS диагностика»).
+          <br><br>
+          «Только GPS» работает лишь в движении, «Только компас» зависит от крепления —
+          там смещение подбирается вручную.
         </div>
       </details>
 
@@ -1025,10 +1032,10 @@ body.light-theme{
           относительно курса на момент старта (TRIM), максимальную и среднюю (10с)
           скорость. Нажатие на TRIM сбрасывает опорный курс.
           <br><br>
-          <b>Курс (Heading).</b> По умолчанию курс берётся из GPS (работает только в
-          движении). Если телефон закреплён неподвижно или не носом вперёд —
-          переключите источник курса на «Компас телефона» в разделе «Курс» и
-          подберите смещение, чтобы курс совпадал с реальным направлением носа лодки.
+          <b>Курс (Heading).</b> По умолчанию режим «Авто»: на малой скорости курс
+          берётся с компаса телефона, на большой — из GPS, а GPS заодно сам
+          подстраивает поправку компаса (раздел «Курс»). Можно выбрать «Только GPS»
+          или «Только компас» с ручным смещением; плавность компаса настраивается там же.
           <br><br>
           <b>Блокировка экрана.</b> Кнопка с замком справа — блокирует экран от
           случайных нажатий (брызги, капли воды): весь экран перестаёт реагировать на
@@ -1180,7 +1187,8 @@ const state = {
   rawGamma: null,
   heelZeroOffset: 0,
   deviceOrientationEnabled: false,
-  headingSource: 'gps',
+  headingSource: 'auto',
+  lastGpsCourse: null,
   headingOffsetDeg: 0,
   rawCompassHeading: null,
   compassTauS: 3,
@@ -1485,12 +1493,18 @@ function onPosition(pos) {
   if (state.headingSource === 'gps' && hdg != null && speedMs >= GPS_MIN_SPEED_FOR_HEADING_MS) {
     state.lastHeading = hdg;
   }
+  if (hdg != null && speedMs >= GPS_MIN_SPEED_FOR_HEADING_MS) {
+    state.lastGpsCourse = { hdg, t: Date.now() };
+    if (speedMs >= AUTO_CAL_MIN_SPEED_MS) learnAutoOffset(hdg);
+  }
 
   state.lastPos = { lat, lon, t };
 
   state.currentSpeedMs = state.currentSpeedMs != null
     ? state.currentSpeedMs + GPS_SPEED_SMOOTHING_ALPHA * (speedMs - state.currentSpeedMs)
     : speedMs;
+
+  updateAutoHeading();
 
   state.speedSamples.push({ t, speedMs });
   const cutoff = t - 10 * 60 * 1000;
@@ -1503,7 +1517,10 @@ function onPosition(pos) {
     `Точность: ±${accuracy != null ? accuracy.toFixed(0) : '?'} м\n` +
     `Координаты: ${lat.toFixed(6)}, ${lon.toFixed(6)}\n` +
     `Скорость (сырая): ${speedMs.toFixed(2)} м/с\n` +
-    `Курс: ${state.lastHeading != null ? state.lastHeading.toFixed(0) + '°' : '--'}`;
+    `Курс: ${state.lastHeading != null ? state.lastHeading.toFixed(0) + '°' : '--'}` +
+    (state.headingSource === 'auto'
+      ? `\nАвто-курс: поправка компаса ${autoOffsetCalibrated ? autoOffsetDeg().toFixed(0) + '° (откалибрована по GPS)' : 'ещё не откалибрована (нужно идти на скорости > 3 уз)'}`
+      : '');
 
   if (!state.log.length || t - state.log[state.log.length - 1].t > 1000) {
     state.log.push({ t, lat, lon, speedMs, hdg: state.lastHeading, acc: accuracy });
@@ -1715,6 +1732,63 @@ function smoothCompassHeading(headingDeg, nowMs) {
   return (toDeg(Math.atan2(compassSmoothX, compassSmoothY)) + 360) % 360;
 }
 
+// 'auto' heading: below AUTO_LOW_SPEED the (smoothed) compass drives the
+// heading, above AUTO_HIGH_SPEED GPS course does, with a linear blend between.
+// Whenever the boat is moving fast enough for a trustworthy GPS course, the
+// difference GPS-minus-compass is folded into a slow running offset, so the
+// compass stays corrected for mounting angle, magnetic declination and local
+// deviation without any manual tuning.
+const AUTO_LOW_SPEED_MS = 1.0;      // ~2 kn: pure compass
+const AUTO_HIGH_SPEED_MS = 2.5;     // ~5 kn: pure GPS
+const AUTO_CAL_MIN_SPEED_MS = 1.5;  // ~3 kn: GPS course good enough to calibrate from
+const AUTO_OFFSET_TAU_S = 15;       // how slowly the learned offset adapts
+const AUTO_GPS_COURSE_MAX_AGE_MS = 5000;
+const AUTO_COMPASS_MAX_AGE_MS = 2000;
+
+let autoOffX = 0, autoOffY = 1, autoOffsetCalibrated = false, autoOffsetLastT = null;
+function autoOffsetDeg() {
+  return toDeg(Math.atan2(autoOffX, autoOffY));
+}
+
+function compassIsFresh() {
+  return state.rawCompassHeading != null && compassLastT != null
+    && performance.now() - compassLastT < AUTO_COMPASS_MAX_AGE_MS;
+}
+
+function learnAutoOffset(gpsHdg) {
+  if (!compassIsFresh()) return;
+  const now = performance.now();
+  const diff = toRad(normalizeSigned(gpsHdg - (state.rawCompassHeading + state.headingOffsetDeg)));
+  let a = 1;
+  if (autoOffsetCalibrated && autoOffsetLastT != null) {
+    a = 1 - Math.exp(-Math.min(5, (now - autoOffsetLastT) / 1000) / AUTO_OFFSET_TAU_S);
+  }
+  autoOffX += a * (Math.sin(diff) - autoOffX);
+  autoOffY += a * (Math.cos(diff) - autoOffY);
+  autoOffsetCalibrated = true;
+  autoOffsetLastT = now;
+}
+
+function updateAutoHeading() {
+  if (state.headingSource !== 'auto') return;
+  const gps = state.lastGpsCourse && Date.now() - state.lastGpsCourse.t < AUTO_GPS_COURSE_MAX_AGE_MS
+    ? state.lastGpsCourse.hdg : null;
+  const compass = compassIsFresh()
+    ? (state.rawCompassHeading + state.headingOffsetDeg + autoOffsetDeg() + 720) % 360 : null;
+  let result = null;
+  if (compass != null && gps != null) {
+    const w = clamp(((state.currentSpeedMs || 0) - AUTO_LOW_SPEED_MS) / (AUTO_HIGH_SPEED_MS - AUTO_LOW_SPEED_MS), 0, 1);
+    const x = (1 - w) * Math.sin(toRad(compass)) + w * Math.sin(toRad(gps));
+    const y = (1 - w) * Math.cos(toRad(compass)) + w * Math.cos(toRad(gps));
+    result = (toDeg(Math.atan2(x, y)) + 360) % 360;
+  } else if (gps != null) {
+    result = gps;
+  } else if (compass != null) {
+    result = compass;
+  }
+  if (result != null) state.lastHeading = result;
+}
+
 // Tilt-compensated compass heading from absolute alpha/beta/gamma. The old
 // "360 - alpha" shortcut only holds with the phone lying flat; with the phone
 // upright on a mount it reads garbage. Uses the horizontal direction of the
@@ -1746,6 +1820,8 @@ function onDeviceOrientation(e) {
     state.rawCompassHeading = smoothCompassHeading(compassRaw, performance.now());
     if (state.headingSource === 'compass') {
       state.lastHeading = (state.rawCompassHeading + state.headingOffsetDeg + 360) % 360;
+    } else if (state.headingSource === 'auto') {
+      updateAutoHeading();
     }
   }
 }
@@ -2673,7 +2749,7 @@ el.calibrateHeelBtn.addEventListener('click', resetHeelAngle);
 
 el.headingSourceSelect.addEventListener('change', () => {
   state.headingSource = el.headingSourceSelect.value;
-  if (state.headingSource === 'compass') {
+  if (state.headingSource === 'compass' || state.headingSource === 'auto') {
     enableOrientationSensor();
   } else {
     state.lastHeading = null;
@@ -2723,6 +2799,13 @@ refreshLogPanel();
 renderPreset();
 syncPageFromHash();
 initGeo();
+if (state.headingSource !== 'gps') {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    document.addEventListener('click', () => enableOrientationSensor(), { once: true });
+  } else {
+    enableOrientationSensor();
+  }
+}
 acquireWakeLock();
 setInterval(render, 100);
 render();
