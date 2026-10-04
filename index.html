@@ -914,6 +914,15 @@ body.light-theme{
           <label>Смещение курса, ° (если телефон закреплён не носом вперёд)</label>
           <input type="number" id="headingOffset" min="-180" max="180" step="1" placeholder="0">
         </div>
+        <div class="menu-row">
+          <label>Сглаживание компаса (выше — плавнее, но медленнее реакция)</label>
+          <select id="compassSmoothingSelect">
+            <option value="0.5">Низкое (0,5 с)</option>
+            <option value="1.5">Среднее (1,5 с)</option>
+            <option value="3" selected>Высокое (3 с)</option>
+            <option value="6">Максимальное (6 с)</option>
+          </select>
+        </div>
         <div class="menu-row menu-readout">
           GPS работает только в движении. Компас телефона показывает курс и стоя на месте,
           но зависит от того, как именно закреплён телефон — подберите смещение так, чтобы
@@ -1174,6 +1183,7 @@ const state = {
   headingSource: 'gps',
   headingOffsetDeg: 0,
   rawCompassHeading: null,
+  compassTauS: 3,
   sessionId: null,
   sessionRegistered: false,
   sessionName: null,
@@ -1207,6 +1217,7 @@ const el = {
   windDir: $('windDir'), tackSelect: $('tackSelect'), biasDetail: $('biasDetail'),
   bowOffset: $('bowOffset'), raceBarGraphSelect: $('raceBarGraphSelect'), calibrateHeelBtn: $('calibrateHeelBtn'),
   headingSourceSelect: $('headingSourceSelect'), headingOffset: $('headingOffset'),
+  compassSmoothingSelect: $('compassSmoothingSelect'),
   speedUnitSelect: $('speedUnitSelect'), distUnitSelect: $('distUnitSelect'), distPrecisionSelect: $('distPrecisionSelect'),
   perfDetail: $('perfDetail'), resetPerfBtn: $('resetPerfBtn'),
   logDetail: $('logDetail'), exportLogBtn: $('exportLogBtn'), clearLogBtn: $('clearLogBtn'),
@@ -1683,20 +1694,40 @@ function resetTrimAngle() {
 const HEEL_MAX_DEG = 75;
 const HEEL_TICK_DEGREES = [15, 30, 45, 60, 75];
 const HEEL_SMOOTHING_ALPHA = 0.15;
-const COMPASS_SMOOTHING_ALPHA = 0.2;
-
-let compassSmoothX = null, compassSmoothY = null;
-function smoothCompassHeading(headingDeg) {
+// Circular-safe, time-based smoothing for a compass heading (0-360°, wraps at
+// the 0/360 boundary) - a plain EMA on the raw degrees breaks near that seam,
+// so the running average is kept as a unit vector instead. The filter's time
+// constant is in seconds, so smoothing feels the same whatever the sensor rate.
+let compassSmoothX = null, compassSmoothY = null, compassLastT = null;
+function smoothCompassHeading(headingDeg, nowMs) {
   const rad = toRad(headingDeg);
   const x = Math.sin(rad), y = Math.cos(rad);
-  if (compassSmoothX == null) {
+  if (compassSmoothX == null || compassLastT == null) {
     compassSmoothX = x;
     compassSmoothY = y;
   } else {
-    compassSmoothX += COMPASS_SMOOTHING_ALPHA * (x - compassSmoothX);
-    compassSmoothY += COMPASS_SMOOTHING_ALPHA * (y - compassSmoothY);
+    const dt = Math.max(0, (nowMs - compassLastT) / 1000);
+    const a = 1 - Math.exp(-dt / state.compassTauS);
+    compassSmoothX += a * (x - compassSmoothX);
+    compassSmoothY += a * (y - compassSmoothY);
   }
+  compassLastT = nowMs;
   return (toDeg(Math.atan2(compassSmoothX, compassSmoothY)) + 360) % 360;
+}
+
+// Tilt-compensated compass heading from absolute alpha/beta/gamma. The old
+// "360 - alpha" shortcut only holds with the phone lying flat; with the phone
+// upright on a mount it reads garbage. Uses the horizontal direction of the
+// phone's back (upright) or top edge (flat), whichever is better defined -
+// they agree in the tilt range where the choice flips, so no jump.
+function tiltCompensatedHeading(alphaDeg, betaDeg, gammaDeg) {
+  const cA = Math.cos(toRad(alphaDeg)), sA = Math.sin(toRad(alphaDeg));
+  const cB = Math.cos(toRad(betaDeg)), sB = Math.sin(toRad(betaDeg));
+  const cG = Math.cos(toRad(gammaDeg)), sG = Math.sin(toRad(gammaDeg));
+  const backE = -(cA * sG + sA * sB * cG), backN = cA * sB * cG - sA * sG;
+  const topE = -sA * cB, topN = cA * cB;
+  const [e, n] = Math.hypot(backE, backN) >= Math.hypot(topE, topN) ? [backE, backN] : [topE, topN];
+  return (toDeg(Math.atan2(e, n)) + 360) % 360;
 }
 
 function onDeviceOrientation(e) {
@@ -1706,11 +1737,13 @@ function onDeviceOrientation(e) {
       : e.gamma;
   }
 
-  const compassRaw = e.webkitCompassHeading != null
-    ? e.webkitCompassHeading
-    : (e.absolute && e.alpha != null ? (360 - e.alpha) % 360 : null);
+  let compassRaw = null;
+  if (e.webkitCompassHeading != null) compassRaw = e.webkitCompassHeading;
+  else if (e.absolute && e.alpha != null && e.beta != null && e.gamma != null) {
+    compassRaw = tiltCompensatedHeading(e.alpha, e.beta, e.gamma);
+  }
   if (compassRaw != null) {
-    state.rawCompassHeading = smoothCompassHeading(compassRaw);
+    state.rawCompassHeading = smoothCompassHeading(compassRaw, performance.now());
     if (state.headingSource === 'compass') {
       state.lastHeading = (state.rawCompassHeading + state.headingOffsetDeg + 360) % 360;
     }
@@ -2649,6 +2682,9 @@ el.headingSourceSelect.addEventListener('change', () => {
 el.headingOffset.addEventListener('input', () => {
   const v = parseFloat(el.headingOffset.value);
   state.headingOffsetDeg = isNaN(v) ? 0 : clamp(v, -180, 180);
+});
+el.compassSmoothingSelect.addEventListener('change', () => {
+  state.compassTauS = parseFloat(el.compassSmoothingSelect.value) || 3;
 });
 
 el.speedUnitSelect.addEventListener('change', () => { state.speedUnit = el.speedUnitSelect.value; });
