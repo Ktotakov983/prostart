@@ -638,6 +638,16 @@ body.light-theme{
 }
 .route-map .leaflet-tile-pane{ filter:saturate(.7) brightness(.9); }
 
+.menu-version{
+  padding:16px 4px 4px;
+  text-align:center;
+  font-size:11px;
+  line-height:1.6;
+  color:#6c7066;
+  letter-spacing:.04em;
+  user-select:text;
+}
+
 .toast{
   position:fixed;
   left:50%;
@@ -1081,6 +1091,8 @@ body.light-theme{
         </div>
       </details>
 
+      <div class="menu-version" id="appVersion"></div>
+
     </div>
   </div>
 </div>
@@ -1141,6 +1153,11 @@ body.light-theme{
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
+
+// Bump on every published change, so it is obvious on the phone whether the
+// new version has arrived or the old one is still cached.
+const WEB_VERSION = '2.4';
+const WEB_VERSION_DATE = '28.10.2026';
 
 const EARTH_R = 6371000;
 const toRad = d => d * Math.PI / 180;
@@ -1232,7 +1249,7 @@ const state = {
 
 const $ = id => document.getElementById(id);
 const el = {
-  gpsDot: $('gpsIcon'), gpsLabel: $('gpsLabel'), compassLabel: $('compassLabel'),
+  gpsDot: $('gpsIcon'), gpsLabel: $('gpsLabel'), compassLabel: $('compassLabel'), appVersion: $('appVersion'),
   menuBtn: $('menuBtn'), menuOverlay: $('menuOverlay'), menuClose: $('menuClose'),
   screenStart: $('screenStart'), screenRace: $('screenRace'),
   lineInfo: $('lineInfo'), timerDisplay: $('timerDisplay'),
@@ -3450,9 +3467,22 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', saveCurrentSessionNow);
 
+function renderVersion() {
+  let app = 'в браузере';
+  if (window.StartGunApp) {
+    try { app = 'приложение StartGun ' + window.StartGunApp.version(); } catch (err) { app = 'приложение StartGun 2'; }
+  } else if (window.StartGunGps) {
+    app = 'приложение StartGun 2';
+  } else if (window.AndroidVolumeBridge) {
+    app = 'приложение StartGun 1';
+  }
+  el.appVersion.innerHTML = `ProStart Web ${WEB_VERSION} от ${WEB_VERSION_DATE}<br>${escapeHtml(app)}`;
+}
+
 loadSettings();
 applySettingsToUi();
 restoreAutoOffset();
+renderVersion();
 state.sessionId = makeSessionId();
 refreshLogPanel();
 renderPreset();
