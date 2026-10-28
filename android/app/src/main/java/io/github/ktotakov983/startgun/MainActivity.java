@@ -18,7 +18,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Full-screen WebView over the ProStart site. Exposes three bridges to the page:
+ * Full-screen WebView over the ProStart site. Exposes StartGunApp (app version)
+ * and three working bridges to the page:
  * AndroidVolumeBridge (hardware volume keys → GUN / mode while the app's screen
  * lock is on, same contract as the first StartGun), StartGunGps (native GPS
  * from {@link GpsService}) and StartGunCompass ({@link CompassSensor}).
@@ -54,6 +55,7 @@ public class MainActivity extends Activity {
         });
         web.addJavascriptInterface(new VolumeBridge(), "AndroidVolumeBridge");
         web.addJavascriptInterface(new GpsBridge(), "StartGunGps");
+        web.addJavascriptInterface(new AppBridge(), "StartGunApp");
         compass = new CompassSensor(this);
         web.addJavascriptInterface(compass, "StartGunCompass");
         web.loadUrl(APP_URL);
@@ -120,6 +122,17 @@ public class MainActivity extends Activity {
 
     // WebView timers are deliberately not paused in onPause: the page keeps
     // draining GPS fixes while the screen is off for as long as Android lets it.
+
+    private class AppBridge {
+        @JavascriptInterface
+        public String version() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (PackageManager.NameNotFoundException e) {
+                return "?";
+            }
+        }
+    }
 
     private class VolumeBridge {
         @JavascriptInterface
