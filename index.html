@@ -1020,9 +1020,16 @@ body.light-theme{
           <br><br>
           <b>Таймер.</b> GUN запускает отсчёт (по умолчанию 5 минут, настраивается в
           «Таймер старта»). Повторное нажатие GUN во время отсчёта округляет
-          оставшееся время до ближайшей минуты (синхронизация по общему сигналу).
-          +1 / −1 корректируют время на минуту. По окончании отсчёта включается
-          экран RACE.
+          оставшееся время вниз до целой минуты (синхронизация по сигналу комитета:
+          нажмите точно в момент сигнала). +1 / −1 корректируют время на минуту.
+          По окончании отсчёта включается экран RACE. Во время гонки новый отсчёт
+          запускается двойным нажатием GUN (в течение 3 секунд), чтобы случайное
+          касание не сбросило таймер и статистику.
+          <br><br>
+          <b>Линия.</b> PIN — левый конец, BOAT — судно комитета (правый конец, если
+          смотреть против ветра из предстартовой зоны). Положительная дистанция —
+          вы перед линией, OCS — за линией. Линия и настройки сохраняются и
+          переживают перезагрузку страницы.
           <br><br>
           <b>Ветер и фаворитный конец.</b> Укажите направление ветра в разделе «Ветер
           и фаворитная сторона» — приложение покажет, какой конец линии ближе к ветру
@@ -1056,8 +1063,8 @@ body.light-theme{
       <details class="menu-section">
         <summary>О приборе</summary>
         <div class="menu-row menu-readout">
-          ProStart Web — веб-копия интерфейса Velocitek ProStart. Работает автономно,
-          прямо из этого файла, открытого локально на телефоне.<br><br>
+          ProStart Web — стартовый таймер для парусных гонок в браузере. Открывайте
+          его по https-ссылке: на локально открытом файле браузер блокирует GPS.<br><br>
           Функции: старт-таймер с синхронизацией (GUN, +1), дистанция и сторона линии,
           определение фаворитного конца по ветру, режим гонки со скоростью, курсом,
           индикатором заход/отход ветра, максимальной и средней (10с) скоростью,
@@ -1103,6 +1110,16 @@ body.light-theme{
       <div class="menu-row menu-readout" id="historyDetailInfo">—</div>
       <div class="menu-row">
         <div id="historyDetailMap" class="route-map history-detail-map"></div>
+      </div>
+      <div class="menu-row">
+        <label>Экспорт записи</label>
+        <div class="menu-row menu-buttons" style="padding:0">
+          <button id="historyExportCsv" class="menu-action">CSV</button>
+          <button id="historyExportGpx" class="menu-action">GPX</button>
+          <button id="historyCopyCsv" class="menu-action">Скопировать CSV</button>
+        </div>
+        <textarea id="historyCsvOutput" class="csv-output" readonly hidden></textarea>
+        <div class="history-item-meta">GPX открывается в Google Earth, Strava, OpenCPN и любой карте треков; CSV — в Excel и Google Таблицах.</div>
       </div>
     </div>
   </div>
@@ -1159,7 +1176,6 @@ function offsetPointForward(lat, lon, headingDeg, distanceM) {
 const state = {
   pin: null,
   boat: null,
-  safeSide: null,
   presetSeconds: 300,
   timerState: 'stopped',
   targetEpoch: null,
@@ -1197,6 +1213,7 @@ const state = {
   sessionName: null,
   sessionCreatedAt: null,
   screenLocked: false,
+  lightTheme: false,
 };
 
 const $ = id => document.getElementById(id);
@@ -1241,11 +1258,50 @@ const el = {
   historyDetailRenameBtn: $('historyDetailRenameBtn'),
   historyDetailChart: $('historyDetailChart'), historyDetailInfo: $('historyDetailInfo'),
   historyDetailMap: $('historyDetailMap'),
+  historyExportCsv: $('historyExportCsv'), historyExportGpx: $('historyExportGpx'),
+  historyCopyCsv: $('historyCopyCsv'), historyCsvOutput: $('historyCsvOutput'),
 };
+
+// Settings and the pinged line survive a reload (Android may kill the tab,
+// StartGun may restart) so the line doesn't have to be pinged again.
+const SETTINGS_KEY = 'prostart_settings_v1';
+const PERSISTED_FIELDS = [
+  'presetSeconds', 'timerMode', 'windDir', 'tack', 'bowOffsetM', 'headingSource',
+  'headingOffsetDeg', 'compassTauS', 'raceBarGraphMode', 'speedUnit', 'distUnit',
+  'distPrecision', 'heelZeroOffset', 'pin', 'boat', 'lightTheme',
+];
+function saveSettings() {
+  const out = {};
+  PERSISTED_FIELDS.forEach(k => { out[k] = state[k]; });
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(out)); } catch (err) {}
+}
+function loadSettings() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)); } catch (err) {}
+  if (!saved || typeof saved !== 'object') return;
+  PERSISTED_FIELDS.forEach(k => { if (saved[k] !== undefined) state[k] = saved[k]; });
+}
+function applySettingsToUi() {
+  el.timerModeSelect.value = state.timerMode;
+  el.windDir.value = state.windDir != null ? state.windDir : '';
+  el.tackSelect.value = state.tack;
+  el.bowOffset.value = state.bowOffsetM ? state.bowOffsetM : '';
+  el.headingSourceSelect.value = state.headingSource;
+  el.headingOffset.value = state.headingOffsetDeg ? state.headingOffsetDeg : '';
+  el.compassSmoothingSelect.value = String(state.compassTauS);
+  el.raceBarGraphSelect.value = state.raceBarGraphMode;
+  el.speedUnitSelect.value = state.speedUnit;
+  el.distUnitSelect.value = state.distUnit;
+  el.distPrecisionSelect.value = state.distPrecision;
+  document.body.classList.toggle('light-theme', !!state.lightTheme);
+}
 
 const SESSIONS_INDEX_KEY = 'prostart_sessions_index_v1';
 const SESSION_KEY_PREFIX = 'prostart_session_';
 const MAX_SESSIONS = 50;
+// 1 point per second: 6 hours per record. When a record is full, recording
+// continues in a new record instead of dropping the start of the race.
+const MAX_LOG_POINTS = 6 * 3600;
 
 function makeSessionId() {
   return 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -1272,18 +1328,59 @@ function saveSessionsIndex(list) {
   } catch (err) {
   }
 }
+// Track points are stored compactly as arrays [dt from start in s, lat, lon,
+// speed m/s, heading, accuracy] - about a third of the size of objects, so many
+// more records fit into the ~5 MB localStorage quota. Old records with object
+// points still load.
+function packLog(log) {
+  if (!log.length) return { t0: 0, pts: [] };
+  const t0 = log[0].t;
+  return {
+    t0,
+    pts: log.map(p => [
+      Math.round((p.t - t0) / 100) / 10, +p.lat.toFixed(6), +p.lon.toFixed(6),
+      +p.speedMs.toFixed(2), p.hdg != null ? Math.round(p.hdg) : null,
+      p.acc != null ? Math.round(p.acc) : null,
+    ]),
+  };
+}
+function unpackLog(packed) {
+  return packed.pts.map(a => ({ t: packed.t0 + a[0] * 1000, lat: a[1], lon: a[2], speedMs: a[3], hdg: a[4], acc: a[5] }));
+}
 function loadSessionFull(id) {
   try {
     const raw = localStorage.getItem(SESSION_KEY_PREFIX + id);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (s.packedLog) { s.log = unpackLog(s.packedLog); delete s.packedLog; }
+    return s;
   } catch (err) {
     return null;
   }
 }
+let storageFullWarned = false;
+// Saves a record; when the quota is exceeded, evicts the oldest other records
+// one by one and retries. Returns false (and warns once) if it still can't fit.
 function saveSessionFull(session) {
-  try {
-    localStorage.setItem(SESSION_KEY_PREFIX + session.id, JSON.stringify(session));
-  } catch (err) {
+  const { log, ...rest } = session;
+  const raw = JSON.stringify({ ...rest, packedLog: packLog(log || []) });
+  for (;;) {
+    try {
+      localStorage.setItem(SESSION_KEY_PREFIX + session.id, raw);
+      storageFullWarned = false;
+      return true;
+    } catch (err) {
+      const index = loadSessionsIndex();
+      const victims = index.filter(e => e.id !== session.id).sort((a, b) => a.createdAt - b.createdAt);
+      if (!victims.length) {
+        if (!storageFullWarned) { storageFullWarned = true; showToast('Память браузера заполнена: история не сохраняется'); }
+        return false;
+      }
+      const victim = victims[0];
+      deleteSessionStorage(victim.id);
+      saveSessionsIndex(index.filter(e => e.id !== victim.id));
+      showToast(`Нет места: удалена старая запись «${victim.name}»`);
+    }
   }
 }
 function deleteSessionStorage(id) {
@@ -1461,9 +1558,8 @@ function onPosition(pos) {
   const t = pos.timestamp || Date.now();
   state.lastAccuracy = accuracy;
 
-  el.gpsDot.classList.add('active');
-
   if (accuracy != null && accuracy > GPS_MAX_ACCEPTABLE_ACCURACY_M) {
+    el.gpsDot.classList.remove('active');
     el.gpsLabel.textContent = `GPS слабый ±${accuracy.toFixed(0)}м`;
     el.gpsDiag.textContent =
       `Secure context: да\n` +
@@ -1472,6 +1568,8 @@ function onPosition(pos) {
     return;
   }
 
+  el.gpsDot.classList.add('active');
+  state.lastGoodFixAt = Date.now();
   el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м`;
 
   let speedMs = (speed != null && !isNaN(speed)) ? speed : 0;
@@ -1509,7 +1607,7 @@ function onPosition(pos) {
   state.speedSamples.push({ t, speedMs });
   const cutoff = t - 10 * 60 * 1000;
   while (state.speedSamples.length && state.speedSamples[0].t < cutoff) state.speedSamples.shift();
-  if (speedMs > state.maxSpeedMs) state.maxSpeedMs = speedMs;
+  updateMax2(t);
   updateBest10(t);
 
   el.gpsDiag.textContent =
@@ -1523,51 +1621,74 @@ function onPosition(pos) {
       : '');
 
   if (!state.log.length || t - state.log[state.log.length - 1].t > 1000) {
+    if (state.log.length >= MAX_LOG_POINTS) {
+      saveCurrentSessionNow();
+      state.sessionId = makeSessionId();
+      state.sessionRegistered = false;
+      state.log = [];
+    }
     state.log.push({ t, lat, lon, speedMs, hdg: state.lastHeading, acc: accuracy });
-    if (state.log.length > 3000) state.log.shift();
     refreshLogPanel();
     if (!state.sessionRegistered) ensureCurrentSessionRegistered(t);
     else scheduleSessionSave();
   }
 }
 
+// MAX is the best 2-second average, not a single GPS sample, so one glitchy
+// fix can't set a record.
+function updateMax2(nowT) {
+  const windowSamples = state.speedSamples.filter(s => s.t >= nowT - 2000);
+  if (windowSamples.length < 2) return;
+  const avg = windowSamples.reduce((a, s) => a + s.speedMs, 0) / windowSamples.length;
+  if (avg > state.maxSpeedMs) state.maxSpeedMs = avg;
+}
+
+// Best 10-second average: only counted once a full 10 s of samples exists.
 function updateBest10(nowT) {
   const windowStart = nowT - 10000;
+  if (!state.speedSamples.length || state.speedSamples[0].t > windowStart + 500) return;
   const windowSamples = state.speedSamples.filter(s => s.t >= windowStart);
   if (!windowSamples.length) return;
   const avg = windowSamples.reduce((a, s) => a + s.speedMs, 0) / windowSamples.length;
   if (avg > state.best10Ms) state.best10Ms = avg;
 }
 
+// Position of the bow: the device position pushed forward by the bow offset.
+// Used both for pinging the line ends and for the distance to the line, so the
+// two always refer to the same point on the boat.
+function bowPosition() {
+  if (!state.lastPos) return null;
+  return offsetPointForward(state.lastPos.lat, state.lastPos.lon, state.lastHeading, state.bowOffsetM);
+}
+
 function markPin() {
-  if (!state.lastPos) { showToast('Нет GPS-фикса'); return; }
-  state.pin = offsetPointForward(state.lastPos.lat, state.lastPos.lon, state.lastHeading, state.bowOffsetM);
+  const bow = bowPosition();
+  if (!bow) { showToast('Нет GPS-фикса'); return; }
+  state.pin = bow;
   showToast('PIN отмечен');
-  recalcSafeSide();
   returnToStartFromRace();
+  saveSettings();
   if (state.sessionRegistered) scheduleSessionSave();
 }
 function markBoat() {
-  if (!state.lastPos) { showToast('Нет GPS-фикса'); return; }
-  state.boat = offsetPointForward(state.lastPos.lat, state.lastPos.lon, state.lastHeading, state.bowOffsetM);
+  const bow = bowPosition();
+  if (!bow) { showToast('Нет GPS-фикса'); return; }
+  state.boat = bow;
   showToast('BOAT отмечен');
-  recalcSafeSide();
   returnToStartFromRace();
+  saveSettings();
   if (state.sessionRegistered) scheduleSessionSave();
 }
 
 function returnToStartFromRace() {
   if (state.timerState === 'race') state.viewOverride = 'start';
 }
-function recalcSafeSide() {
-  if (state.pin && state.boat && state.lastPos) {
-    const a = project(state.pin.lat, state.pin.lon, state.pin.lat, state.pin.lon);
-    const b = project(state.boat.lat, state.boat.lon, state.pin.lat, state.pin.lon);
-    const p = project(state.lastPos.lat, state.lastPos.lon, state.pin.lat, state.pin.lon);
-    const d = signedDistToLine(p, a, b);
-    state.safeSide = Math.sign(d) || 1;
-  }
-}
+// The pre-start side is fixed by the geometry, not by where the boat happened
+// to be when the second end was pinged: looking upwind from the pre-start
+// side, PIN is the left end and BOAT (committee boat) the right end. With the
+// line vector PIN→BOAT, the pre-start side is to its right, i.e. where the
+// cross product is negative.
+const PRESTART_SIDE = -1;
 
 function lineGeometry() {
   if (!state.pin || !state.boat) return null;
@@ -1580,11 +1701,10 @@ function lineGeometry() {
 
 function distanceToLine() {
   const geo = lineGeometry();
-  if (!geo || !state.lastPos) return null;
-  const p = project(state.lastPos.lat, state.lastPos.lon, state.pin.lat, state.pin.lon);
-  const signed = signedDistToLine(p, geo.a, geo.b);
-  const safe = state.safeSide || 1;
-  return signed * safe;
+  const bow = bowPosition();
+  if (!geo || !bow) return null;
+  const p = project(bow.lat, bow.lon, state.pin.lat, state.pin.lon);
+  return signedDistToLine(p, geo.a, geo.b) * PRESTART_SIDE;
 }
 
 function favoredEnd() {
@@ -1607,6 +1727,9 @@ function lineSquareTo() {
   return (boatToPinBearing + 90) % 360;
 }
 
+const GUN_RESTART_CONFIRM_MS = 3000;
+let gunRestartArmedUntil = 0;
+
 function pressGun() {
   if (state.timerMode === 'countup' && state.timerState === 'race' && !state.countUpStopped) {
     state.countUpStopped = true;
@@ -1614,7 +1737,15 @@ function pressGun() {
     showToast('Счёт остановлен');
     return;
   }
+  // During a race a single (possibly accidental) GUN press must not restart the
+  // countdown and wipe MAX/AVG10: it has to be pressed twice within 3 s.
+  if (state.timerState === 'race' && Date.now() > gunRestartArmedUntil) {
+    gunRestartArmedUntil = Date.now() + GUN_RESTART_CONFIRM_MS;
+    showToast('Нажмите GUN ещё раз для нового старта');
+    return;
+  }
   if (state.timerState === 'stopped' || state.timerState === 'race') {
+    gunRestartArmedUntil = 0;
     state.raceStartEpoch = null;
     state.trimAngle = null;
     state.trimCandidateHeading = null;
@@ -1630,7 +1761,9 @@ function pressGun() {
     showToast('Отсчёт запущен');
   } else if (state.timerState === 'counting') {
     const remainingMs = state.targetEpoch - Date.now();
-    const roundedMs = Math.max(0, Math.round(remainingMs / 60000) * 60000);
+    // Sync rounds DOWN to the whole minute, like the committee's signals:
+    // pressed at 4:35 on the 4-minute signal → 4:00.
+    const roundedMs = Math.max(0, Math.floor(remainingMs / 60000) * 60000);
     state.targetEpoch = Date.now() + roundedMs;
     showToast(`Синхронизация: ${Math.round(roundedMs / 60000)} мин`);
   }
@@ -1832,6 +1965,10 @@ async function enableOrientationSensor() {
     showToast('Датчик ориентации недоступен в этом браузере');
     return;
   }
+  // iOS: both prompts must be started synchronously inside the same tap.
+  const motionPermission = (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function')
+    ? DeviceMotionEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
+  motionPermission.then(r => { if (r === 'granted') window.addEventListener('devicemotion', onDeviceMotion); });
   if (typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
       const result = await DeviceOrientationEvent.requestPermission();
@@ -1849,13 +1986,40 @@ async function enableOrientationSensor() {
   state.deviceOrientationEnabled = true;
 }
 
+// Heel from the gravity vector (devicemotion). Orientation 'gamma' is unstable
+// when the phone stands upright on a mast mount (gimbal lock near beta = 90°),
+// gravity in the screen plane isn't. Positive = heel to starboard for a phone
+// whose screen faces the helmsman. Falls back to gamma if there is no motion data.
+let motionHeelSeen = false;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function onDeviceMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x == null || g.y == null) return;
+  const angle = toRad((screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0));
+  const sgn = isIOS ? -1 : 1;  // iOS reports the opposite sign
+  const x = sgn * g.x, y = sgn * g.y;
+  const xs = x * Math.cos(angle) - y * Math.sin(angle);
+  const ys = x * Math.sin(angle) + y * Math.cos(angle);
+  const heel = toDeg(Math.atan2(-xs, ys));
+  motionHeelSeen = true;
+  state.rawHeel = state.rawHeel != null
+    ? state.rawHeel + HEEL_SMOOTHING_ALPHA * (heel - state.rawHeel)
+    : heel;
+}
+
+function rawHeelAngle() {
+  return motionHeelSeen ? state.rawHeel : state.rawGamma;
+}
+
 function currentHeelAngle() {
-  if (state.rawGamma == null) return null;
-  return clamp(state.rawGamma - state.heelZeroOffset, -HEEL_MAX_DEG, HEEL_MAX_DEG);
+  const raw = rawHeelAngle();
+  if (raw == null) return null;
+  return clamp(raw - state.heelZeroOffset, -HEEL_MAX_DEG, HEEL_MAX_DEG);
 }
 
 function resetHeelAngle() {
-  state.heelZeroOffset = state.rawGamma || 0;
+  state.heelZeroOffset = rawHeelAngle() || 0;
+  saveSettings();
   showToast('Крен обнулён');
 }
 
@@ -1956,13 +2120,16 @@ function computePacingPrediction(now, currentDistM) {
   const remainingSec = (state.targetEpoch - now) / 1000;
   if (remainingSec <= 0 || remainingSec > PACING_WINDOW_SECONDS) return null;
 
-  const headingRad = toRad(state.lastHeading);
+  // Predict along the actual track (GPS course over ground) when it is fresh,
+  // so leeway and current are included; fall back to the bow heading.
+  const cog = state.lastGpsCourse && Date.now() - state.lastGpsCourse.t < AUTO_GPS_COURSE_MAX_AGE_MS
+    ? state.lastGpsCourse.hdg : state.lastHeading;
+  const headingRad = toRad(cog);
   const vx = state.currentSpeedMs * Math.sin(headingRad);
   const vy = state.currentSpeedMs * Math.cos(headingRad);
   const abx = geo.b.x - geo.a.x, aby = geo.b.y - geo.a.y;
   const len = Math.hypot(abx, aby) || 1e-9;
-  const safe = state.safeSide || 1;
-  const closingRate = ((abx * vy - aby * vx) / len) * safe;
+  const closingRate = ((abx * vy - aby * vx) / len) * PRESTART_SIDE;
   return currentDistM + closingRate * remainingSec;
 }
 
@@ -2260,12 +2427,101 @@ function openHistoryDetail(id) {
   }
   historyView = full;
   historyChartSelIndex = null;
+  el.historyCsvOutput.hidden = true;
   el.historyDetailName.textContent = full.name;
   el.historyDetailNameInput.value = full.name;
   renderHistoryInfo();
   drawHistoryChart();
   ensureHistoryMap();
   setTimeout(updateHistoryMap, 50);
+}
+
+// ---- export of a history record ----
+function sessionFileBase(view) {
+  const name = (view.name || formatSessionName(view.createdAt || Date.now()))
+    .replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_');
+  return 'prostart_' + name;
+}
+
+function sessionToCsv(view) {
+  const startT = view.raceStartEpoch;
+  const header = 'time_iso,lat,lon,speed_ms,speed_kn,heading_deg,accuracy_m,race_time_s\n';
+  const rows = view.log.map(p => [
+    new Date(p.t).toISOString(), p.lat.toFixed(6), p.lon.toFixed(6),
+    p.speedMs.toFixed(2), (p.speedMs * 1.9438444924).toFixed(2),
+    p.hdg != null ? Math.round(p.hdg) : '', p.acc != null ? Math.round(p.acc) : '',
+    startT != null ? Math.round((p.t - startT) / 1000) : '',
+  ].join(',')).join('\n');
+  return header + rows + '\n';
+}
+
+function sessionToGpx(view) {
+  const x = s => escapeHtml(s);
+  const wpt = (p, name) => p ? `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${name}</name></wpt>\n` : '';
+  const startIdx = findStartIndexIn(view);
+  const pts = view.log.map(p =>
+    `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><time>${new Date(p.t).toISOString()}</time>` +
+    `${p.hdg != null ? `<course>${Math.round(p.hdg)}</course>` : ''}<speed>${p.speedMs.toFixed(2)}</speed></trkpt>`
+  ).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<gpx version="1.1" creator="ProStart Web" xmlns="http://www.topografix.com/GPX/1/1">\n` +
+    `  <metadata><name>${x(view.name || '')}</name></metadata>\n` +
+    wpt(view.pin, 'PIN') + wpt(view.boat, 'BOAT') +
+    (startIdx >= 0 ? wpt(view.log[startIdx], 'START') : '') +
+    `  <trk><name>${x(view.name || '')}</name><trkseg>\n${pts}\n  </trkseg></trk>\n</gpx>\n`;
+}
+
+// On a phone, hand the file to the system share sheet (Telegram, Files, Drive…);
+// otherwise download it. Inside the StartGun WebView neither may be available,
+// so the copy-to-clipboard button stays as the last resort.
+async function deliverFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  const isTouch = navigator.maxTouchPoints > 0;
+  if (isTouch && typeof File !== 'undefined' && navigator.canShare) {
+    const file = new File([blob], filename, { type: mime });
+    if (navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      }
+    }
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast('Файл сохранён: ' + filename);
+  } catch (err) {
+    showToast('Не удалось сохранить файл — используйте «Скопировать CSV»');
+  }
+}
+
+function exportHistory(kind) {
+  if (!historyView || !historyView.log || !historyView.log.length) { showToast('В записи нет точек GPS'); return; }
+  const base = sessionFileBase(historyView);
+  if (kind === 'gpx') deliverFile(base + '.gpx', sessionToGpx(historyView), 'application/gpx+xml');
+  else deliverFile(base + '.csv', sessionToCsv(historyView), 'text/csv');
+}
+
+function copyHistoryCsv() {
+  if (!historyView || !historyView.log || !historyView.log.length) { showToast('В записи нет точек GPS'); return; }
+  const csv = sessionToCsv(historyView);
+  const fallback = () => {
+    el.historyCsvOutput.value = csv;
+    el.historyCsvOutput.hidden = false;
+    el.historyCsvOutput.focus();
+    el.historyCsvOutput.select();
+    showToast('Скопируйте текст вручную');
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(csv).then(() => showToast('CSV скопирован в буфер обмена'), fallback);
+  } else {
+    fallback();
+  }
 }
 
 function commitHistoryRename() {
@@ -2331,8 +2587,16 @@ function updateShiftTicks(deltaDeg, isHeader) {
     : 'var(--lcd-fg-dim)';
 }
 
+const GPS_STALE_MS = 5000;
+
 function render() {
   const now = Date.now();
+
+  // No usable fix for a while → the GPS icon must not stay green.
+  if (state.lastGoodFixAt && now - state.lastGoodFixAt > GPS_STALE_MS && el.gpsDot.classList.contains('active')) {
+    el.gpsDot.classList.remove('active');
+    el.gpsLabel.textContent = 'GPS потерян';
+  }
 
   if (state.timerState === 'counting' && state.targetEpoch != null) {
     if (now >= state.targetEpoch) {
@@ -2443,14 +2707,14 @@ function render() {
 
       if (state.trimAngle != null && state.lastHeading != null) {
         let delta = normalizeSigned(state.lastHeading - state.trimAngle);
-        const isStarboard = state.tack === 'starboard';
-        const headerSign = isStarboard ? 1 : -1;
-        const isHeader = Math.sign(delta) === headerSign && Math.abs(delta) > 1;
-        const isLift = Math.sign(delta) === -headerSign && Math.abs(delta) > 1;
+        // Starboard tack: turning right (heading up) is a lift; port: the opposite.
+        const liftSign = state.tack === 'starboard' ? 1 : -1;
+        const isLift = Math.sign(delta) === liftSign && Math.abs(delta) > 1;
+        const isHeader = Math.sign(delta) === -liftSign && Math.abs(delta) > 1;
         updateShiftTicks(delta, isHeader);
-        el.shiftLabel.textContent = isHeader
+        el.shiftLabel.textContent = isLift
           ? `ЗАХОД ${Math.abs(delta).toFixed(0)}°`
-          : isLift
+          : isHeader
             ? `ОТХОД ${Math.abs(delta).toFixed(0)}°`
             : `ровно ${delta.toFixed(0)}°`;
         el.trimReadout.textContent = `TRIM ${Math.round(state.trimAngle)}°`;
@@ -2544,8 +2808,10 @@ el.btnHistory.addEventListener('click', () => { location.hash = 'history'; });
 el.openHistoryListBtn.addEventListener('click', () => { location.hash = 'history'; });
 
 el.btnNight.addEventListener('click', () => {
-  document.body.classList.toggle('light-theme');
-  showToast(document.body.classList.contains('light-theme') ? 'Светлая тема' : 'Тёмная тема');
+  state.lightTheme = !state.lightTheme;
+  document.body.classList.toggle('light-theme', state.lightTheme);
+  saveSettings();
+  showToast(state.lightTheme ? 'Светлая тема' : 'Тёмная тема');
 });
 
 const VOLUME_WATCH_BASELINE = 0.5;
@@ -2713,6 +2979,10 @@ el.historyDetailRenameBtn.addEventListener('click', () => {
 el.historyDetailNameInput.addEventListener('blur', commitHistoryRename);
 el.historyDetailNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') el.historyDetailNameInput.blur(); });
 
+el.historyExportCsv.addEventListener('click', () => exportHistory('csv'));
+el.historyExportGpx.addEventListener('click', () => exportHistory('gpx'));
+el.historyCopyCsv.addEventListener('click', copyHistoryCsv);
+
 el.historyDetailChart.addEventListener('pointerdown', onHistoryChartPointer);
 el.historyDetailChart.addEventListener('pointermove', e => { if (e.buttons) onHistoryChartPointer(e); });
 
@@ -2721,28 +2991,33 @@ window.addEventListener('hashchange', syncPageFromHash);
 el.presetMinus.addEventListener('click', () => {
   state.presetSeconds = clamp(state.presetSeconds - 60, 60, 900);
   renderPreset();
+  saveSettings();
 });
 el.presetPlus.addEventListener('click', () => {
   state.presetSeconds = clamp(state.presetSeconds + 60, 60, 900);
   renderPreset();
+  saveSettings();
 });
 el.newStartBtn.addEventListener('click', newStart);
-el.timerModeSelect.addEventListener('change', () => { state.timerMode = el.timerModeSelect.value; });
+el.timerModeSelect.addEventListener('change', () => { state.timerMode = el.timerModeSelect.value; saveSettings(); });
 
 el.windDir.addEventListener('input', () => {
   const v = parseFloat(el.windDir.value);
   state.windDir = isNaN(v) ? null : ((v % 360) + 360) % 360;
+  saveSettings();
 });
-el.tackSelect.addEventListener('change', () => { state.tack = el.tackSelect.value; });
+el.tackSelect.addEventListener('change', () => { state.tack = el.tackSelect.value; saveSettings(); });
 
 el.bowOffset.addEventListener('input', () => {
   const v = parseFloat(el.bowOffset.value);
   state.bowOffsetM = isNaN(v) ? 0 : clamp(v, 0, 12.5);
+  saveSettings();
 });
 
 el.raceBarGraphSelect.addEventListener('change', () => {
   state.raceBarGraphMode = el.raceBarGraphSelect.value;
   if (state.raceBarGraphMode === 'heel') enableOrientationSensor();
+  saveSettings();
 });
 el.heelReadout.addEventListener('click', resetHeelAngle);
 el.calibrateHeelBtn.addEventListener('click', resetHeelAngle);
@@ -2754,18 +3029,21 @@ el.headingSourceSelect.addEventListener('change', () => {
   } else {
     state.lastHeading = null;
   }
+  saveSettings();
 });
 el.headingOffset.addEventListener('input', () => {
   const v = parseFloat(el.headingOffset.value);
   state.headingOffsetDeg = isNaN(v) ? 0 : clamp(v, -180, 180);
+  saveSettings();
 });
 el.compassSmoothingSelect.addEventListener('change', () => {
   state.compassTauS = parseFloat(el.compassSmoothingSelect.value) || 3;
+  saveSettings();
 });
 
-el.speedUnitSelect.addEventListener('change', () => { state.speedUnit = el.speedUnitSelect.value; });
-el.distUnitSelect.addEventListener('change', () => { state.distUnit = el.distUnitSelect.value; });
-el.distPrecisionSelect.addEventListener('change', () => { state.distPrecision = el.distPrecisionSelect.value; });
+el.speedUnitSelect.addEventListener('change', () => { state.speedUnit = el.speedUnitSelect.value; saveSettings(); });
+el.distUnitSelect.addEventListener('change', () => { state.distUnit = el.distUnitSelect.value; saveSettings(); });
+el.distPrecisionSelect.addEventListener('change', () => { state.distPrecision = el.distPrecisionSelect.value; saveSettings(); });
 
 el.resetPerfBtn.addEventListener('click', () => {
   state.maxSpeedMs = 0; state.best10Ms = 0; state.speedSamples = [];
@@ -2794,6 +3072,8 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', saveCurrentSessionNow);
 
+loadSettings();
+applySettingsToUi();
 state.sessionId = makeSessionId();
 refreshLogPanel();
 renderPreset();
