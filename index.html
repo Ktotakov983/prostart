@@ -1620,7 +1620,9 @@ function onPosition(pos) {
       ? `\nАвто-курс: поправка компаса ${autoOffsetCalibrated ? autoOffsetDeg().toFixed(0) + '° (откалибрована по GPS)' : 'ещё не откалибрована (нужно идти на скорости > 3 уз)'}`
       : '');
 
-  if (!state.log.length || t - state.log[state.log.length - 1].t > 1000) {
+  // GPS delivers ~1 fix/s with jitter (0.98-1.02 s); a strict "> 1000 ms" test
+  // skipped every other fix and logged only every 2 s.
+  if (!state.log.length || t - state.log[state.log.length - 1].t >= 900) {
     if (state.log.length >= MAX_LOG_POINTS) {
       saveCurrentSessionNow();
       state.sessionId = makeSessionId();
