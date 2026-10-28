@@ -13,7 +13,8 @@ android {
         minSdk 24
         targetSdk 34
         versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger() + 1)
-        versionName '2.0'
+        // Matches the release tag startgun-2.<build number>.
+        versionName '2.' + (System.getenv('GITHUB_RUN_NUMBER') ?: 'dev')
     }
 
     signingConfigs {
