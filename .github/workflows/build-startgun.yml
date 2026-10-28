@@ -1,0 +1,66 @@
+name: Build StartGun APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-startgun.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      # The signing key comes from repository secrets and only ever exists in
+      # the runner's temp folder; it is never committed.
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.STARTGUN_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.STARTGUN_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Repository secrets STARTGUN_KEYSTORE_B64 and STARTGUN_KEYSTORE_PASSWORD are not set"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/startgun.p12"
+          ALIAS=$(keytool -list -v -storetype pkcs12 -keystore "$RUNNER_TEMP/startgun.p12" \
+            -storepass "$KEYSTORE_PASSWORD" | sed -n 's/^Alias name: //p' | head -n1)
+          if [ -z "$ALIAS" ]; then echo "::error::Could not read the key alias from the keystore"; exit 1; fi
+          echo "STARTGUN_KEYSTORE=$RUNNER_TEMP/startgun.p12" >> "$GITHUB_ENV"
+          echo "STARTGUN_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Build
+        working-directory: android
+        env:
+          STARTGUN_KEYSTORE_PASSWORD: ${{ secrets.STARTGUN_KEYSTORE_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/startgun.p12"
+
+      - run: cp android/app/build/outputs/apk/release/app-release.apk StartGun.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: startgun-2.${{ github.run_number }}
+          name: StartGun 2 (сборка ${{ github.run_number }})
+          body: |
+            Нативный GPS: запись трека и при выключенном экране.
+            Ставится рядом с первым StartGun, не заменяя его.
+          files: StartGun.apk
+          make_latest: true
