@@ -44,6 +44,10 @@ public class GpsService extends Service implements LocationListener {
     private static volatile int satsUsed = -1;
     private static volatile int satsVisible = -1;
     private static volatile boolean fullTracking = false;
+    // Last fix, for the compass's magnetic declination.
+    static volatile boolean hasFix = false;
+    static volatile double lastLat = 0;
+    static volatile double lastLon = 0;
 
     private LocationManager locationManager;
     private PowerManager.WakeLock wakeLock;
@@ -150,6 +154,9 @@ public class GpsService extends Service implements LocationListener {
 
     @Override
     public void onLocationChanged(Location l) {
+        lastLat = l.getLatitude();
+        lastLon = l.getLongitude();
+        hasFix = true;
         // Wall-clock time of the fix, in the same clock as the page's Date.now().
         long ageMs = (SystemClock.elapsedRealtimeNanos() - l.getElapsedRealtimeNanos()) / 1_000_000L;
         long t = System.currentTimeMillis() - Math.max(0, ageMs);

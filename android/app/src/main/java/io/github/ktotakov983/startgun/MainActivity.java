@@ -18,16 +18,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Full-screen WebView over the ProStart site. Exposes two bridges to the page:
+ * Full-screen WebView over the ProStart site. Exposes three bridges to the page:
  * AndroidVolumeBridge (hardware volume keys → GUN / mode while the app's screen
- * lock is on, same contract as the first StartGun) and StartGunGps (native GPS
- * from {@link GpsService}).
+ * lock is on, same contract as the first StartGun), StartGunGps (native GPS
+ * from {@link GpsService}) and StartGunCompass ({@link CompassSensor}).
  */
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://ktotakov983.github.io/prostart/";
     private static final int REQUEST_PERMISSIONS = 1;
 
     private WebView web;
+    private CompassSensor compass;
     private volatile boolean volumeKeysEnabled = false;
     private boolean permissionsAsked = false;
 
@@ -53,9 +54,25 @@ public class MainActivity extends Activity {
         });
         web.addJavascriptInterface(new VolumeBridge(), "AndroidVolumeBridge");
         web.addJavascriptInterface(new GpsBridge(), "StartGunGps");
+        compass = new CompassSensor(this);
+        web.addJavascriptInterface(compass, "StartGunCompass");
         web.loadUrl(APP_URL);
 
         requestNeededPermissions();
+    }
+
+    // The compass is only needed while the screen shows it; GPS keeps running
+    // in GpsService regardless.
+    @Override
+    protected void onResume() {
+        super.onResume();
+        compass.start();
+    }
+
+    @Override
+    protected void onPause() {
+        compass.stop();
+        super.onPause();
     }
 
     private boolean hasLocationPermission() {
