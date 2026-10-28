@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#15191c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Стартовый прибор</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@400;600;700&family=Share+Tech+Mono&display=swap">
+<style>
+/* Layout: a hand-held instrument (shell + LCD + keypad) on the left, chart and simulator on the right; stacks to one column on phones. */
+:root{
+  --room:#101315;          /* page around the instrument */
+  --shell:#1f2529;         /* instrument body */
+  --shell-edge:#323a40;
+  --key:#2b3237;
+  --key-hi:#3a434a;
+  --ink:#e6ebe7;           /* text on body */
+  --muted:#8d989b;
+  --signal:#f0a530;        /* GUN / race-committee amber */
+  --pin:#5fb3d9;           /* pin end (triangle) */
+  --rc:#e2675a;            /* committee boat end (square) */
+  --lcd-bg:#c3ccba;
+  --lcd-ink:#121812;
+  --lcd-ghost:rgba(18,24,18,.075);
+  --font-lcd:"Share Tech Mono",ui-monospace,"Consolas",monospace;
+  --font-ui:"IBM Plex Sans Condensed","Arial Narrow","Roboto Condensed",system-ui,sans-serif;
+  color-scheme:dark;
+}
+:root[data-light="white"]{--lcd-bg:#0a0d0c;--lcd-ink:#f2f6f0;--lcd-ghost:rgba(242,246,240,.06)}
+:root[data-light="red"]{--lcd-bg:#0a0404;--lcd-ink:#ff3b2c;--lcd-ghost:rgba(255,59,44,.07);--ink:#ff8a7c;--muted:#9a4a42;--signal:#ff5a3c}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--room);color:var(--ink);font:15px/1.4 var(--font-ui);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+button{font:inherit;color:inherit}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+.top{display:flex;align-items:center;gap:8px;max-width:1040px;margin:0 auto;padding-block:12px 8px}
+.brand{font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:13px;margin-right:auto}
+.brand small{color:var(--muted);font-weight:400;letter-spacing:.05em;text-transform:none;margin-left:6px}
+@media (max-width:520px){.brand small{display:none}}
+.tbtn{background:transparent;border:1px solid var(--shell-edge);border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer}
+.tbtn:hover{background:var(--key)}
+
+.wrap{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:24px;max-width:1040px;margin:0 auto;padding-block:4px 24px;align-items:start}
+@media (max-width:860px){.wrap{grid-template-columns:minmax(0,1fr)}.device{margin:0 auto}}
+
+/* ---------- instrument ---------- */
+.device{width:100%;max-width:440px;background:linear-gradient(180deg,var(--shell) 0%,#192023 100%);border:1px solid var(--shell-edge);border-radius:28px;padding:12px 12px 16px;box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04);user-select:none;-webkit-user-select:none;touch-action:manipulation}
+.pwr-row{display:flex;justify-content:center;margin-bottom:8px}
+.face{display:grid;grid-template-columns:52px minmax(0,1fr) 52px;gap:8px;align-items:center}
+.k{background:var(--key);border:1px solid var(--key-hi);border-radius:12px;min-height:48px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer;touch-action:none;font-weight:600;font-size:14px;letter-spacing:.06em;box-shadow:0 2px 0 rgba(0,0,0,.35)}
+.k small{font-size:10px;font-weight:400;color:var(--muted);letter-spacing:.04em}
+.k.down{transform:translateY(1px);box-shadow:none;background:var(--key-hi)}
+.k.side{height:120px}
+.k.pin .glyph{color:var(--pin)} .k.rc .glyph{color:var(--rc)}
+.glyph{font-size:20px;line-height:1}
+.k.pwr{min-height:34px;width:120px;border-radius:17px;font-size:12px}
+.keys{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+.k.gun{margin-top:8px;min-height:64px;background:linear-gradient(180deg,#f3b244,#d98c1b);border-color:#f7c56a;color:#1b1406;font-size:20px;letter-spacing:.2em;width:100%}
+.k.gun small{color:#4a3511}
+.combos{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.combos button{flex:1 1 calc(50% - 6px);background:transparent;border:1px dashed var(--shell-edge);border-radius:9px;padding:7px 6px;font-size:12.5px;cursor:pointer;color:var(--ink);text-align:left}
+.combos button span{color:var(--muted);font-size:11px;display:block}
+.combos button:hover{background:var(--key)}
+
+/* ---------- LCD ---------- */
+.lcd{position:relative;aspect-ratio:300/260;max-width:100%;background:var(--lcd-bg);border-radius:22px;box-shadow:inset 0 2px 8px rgba(0,0,0,.35),inset 0 0 0 3px rgba(0,0,0,.25);color:var(--lcd-ink);container-type:inline-size;overflow:hidden}
+.lcd svg.ring{position:absolute;inset:0;width:100%;height:100%}
+.ring path{fill:none;stroke:var(--lcd-ink);stroke-width:9;stroke-linecap:butt}
+.ring path.off{stroke:var(--lcd-ghost)}
+.ring .arrow{fill:var(--lcd-ink)} .ring .arrow.off{fill:var(--lcd-ghost)}
+.lcd .ico{position:absolute;font:600 4.3cqw/1 var(--font-ui);letter-spacing:.08em}
+.ico.mode{top:9.5%;left:9%;display:flex;gap:2.5cqw}
+.ico.mode span{opacity:.08} .ico.mode span.on{opacity:1}
+.row{position:absolute;left:12%;right:12%;display:flex;align-items:center;justify-content:flex-end;gap:2cqw}
+.row .v{font:27cqw/1 var(--font-lcd);letter-spacing:-.02em;white-space:nowrap;font-variant-numeric:tabular-nums}
+.row .lab{display:flex;flex-direction:column;gap:.6cqw;font:600 3.4cqw/1 var(--font-ui);letter-spacing:.06em;min-width:9cqw}
+.row .lab span{opacity:.08} .row .lab span.on{opacity:1}
+.row.r1{top:17%;height:31%} .row.r2{top:55%;height:31%}
+.row.small .v{font-size:19cqw}
+.ends{position:absolute;left:4.5%;right:4.5%;top:50.5%;height:0}
+.ends .hc{position:absolute;top:-4.6cqw;width:4.6cqw;height:9.2cqw;border:1.1cqw solid var(--lcd-ink)}
+.ends .hc.l{left:0;border-left:none;border-radius:0 9cqw 9cqw 0}
+.ends .hc.r{right:0;border-right:none;border-radius:9cqw 0 0 9cqw}
+.ends .hc.ghost{border-color:var(--lcd-ghost)}
+.ends .ln{position:absolute;left:5cqw;right:5cqw;top:-.45cqw;height:.9cqw;background:var(--lcd-ink)}
+.ends .ln.off{background:var(--lcd-ghost)}
+.blink{animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.blink{animation-duration:2s}}
+.status{position:absolute;left:12%;right:12%;bottom:6.5%;display:flex;align-items:center;gap:3cqw;font:600 3.5cqw/1 var(--font-ui);letter-spacing:.05em}
+.status .sp{margin-left:auto}
+.status .off{opacity:.08}
+.bat{display:inline-flex;gap:.6cqw;align-items:center;border:.6cqw solid currentColor;padding:.5cqw;border-radius:.8cqw;height:3.6cqw}
+.bat i{display:block;width:2.4cqw;height:1.8cqw;background:currentColor}
+.bat i.off{opacity:.12}
+.offscreen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#0b0f0d;color:#7f8c85;font:600 15px/1.3 var(--font-ui);text-align:center;padding:20px;cursor:pointer}
+.offscreen b{color:#e6ebe7;font-size:18px}
+
+/* ---------- side panels ---------- */
+.panel{background:var(--shell);border:1px solid var(--shell-edge);border-radius:18px;padding:14px;min-width:0}
+.panel + .panel{margin-top:16px}
+.panel h2{margin:0 0 10px;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:8px}
+.panel h2 .sp{margin-left:auto}
+canvas#map{width:100%;aspect-ratio:4/3;display:block;border-radius:12px;background:#0d1417}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:10px}
+.readout div{background:var(--room);border-radius:10px;padding:8px 10px;min-width:0}
+.readout b{display:block;font:20px/1.1 var(--font-lcd);font-variant-numeric:tabular-nums}
+.readout span{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.simctl{display:grid;gap:10px}
+.simctl .r{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{background:var(--key);border:1px solid var(--key-hi);border-radius:9px;padding:8px 12px;cursor:pointer;font-size:13.5px}
+.btn:hover{background:var(--key-hi)}
+.btn.acc{background:var(--signal);color:#1b1406;border-color:var(--signal);font-weight:600}
+.btn.danger{border-color:var(--rc);color:var(--rc)}
+input[type=range]{accent-color:var(--signal);flex:1;min-width:120px}
+label.chk{display:flex;gap:8px;align-items:center;cursor:pointer;font-size:14px}
+.note{color:var(--muted);font-size:13px;margin:6px 0 0}
+
+/* ---------- sheets ---------- */
+.sheet{position:fixed;inset:0;background:rgba(5,7,8,.7);display:flex;align-items:flex-end;justify-content:center;z-index:20;padding:0 max(0px,env(safe-area-inset-right,0px)) 0 max(0px,env(safe-area-inset-left,0px))}
+.sheet .box{background:var(--shell);border:1px solid var(--shell-edge);border-radius:20px 20px 0 0;width:100%;max-width:640px;max-height:88vh;overflow:auto;padding:16px max(16px,env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+@media (min-width:700px){.sheet{align-items:center}.sheet .box{border-radius:20px}}
+.sheet h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
+.sheet h3 .sp{margin-left:auto}
+.set{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 10px;padding:12px 0;border-top:1px solid var(--shell-edge)}
+.set .n{font:14px var(--font-lcd);color:var(--muted);padding-top:2px}
+.set .t{font-weight:600}
+.set .t code{font:12px var(--font-lcd);color:var(--muted);margin-left:6px;font-weight:400}
+.set .ctl{grid-column:2;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--key-hi);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;border:0;padding:7px 11px;cursor:pointer;font-size:13.5px;border-right:1px solid var(--key-hi)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--signal);color:#1b1406;font-weight:600}
+.stepper{display:flex;align-items:center;gap:6px;width:100%}
+.stepper output{font:18px var(--font-lcd);min-width:70px;text-align:center}
+.stepper button{width:38px;height:34px;border-radius:8px;background:var(--key);border:1px solid var(--key-hi);cursor:pointer;font-size:18px}
+.hint{grid-column:2;color:var(--muted);font-size:12.5px}
+.loglist{display:grid;gap:8px;margin-top:10px}
+.logitem{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--room);border-radius:12px;padding:10px 12px}
+.logitem .meta{flex:1 1 200px;min-width:0}
+.logitem .meta b{display:block}
+.logitem .meta span{color:var(--muted);font-size:12.5px}
+.help{line-height:1.5}
+.help h4{margin:14px 0 4px;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.help table{border-collapse:collapse;width:100%;font-size:14px}
+.help td{padding:4px 6px;border-top:1px solid var(--shell-edge);vertical-align:top}
+.help td:first-child{white-space:nowrap;font-family:var(--font-lcd);color:var(--signal)}
+.help ol{padding-left:20px;margin:4px 0}
+.tablewrap{overflow-x:auto}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">Старт-Линия<small>стартовый прибор для парусных гонок</small></div>
+  <button class="tbtn" id="bSettings" type="button">Настройки</button>
+  <button class="tbtn" id="bLog" type="button">Журнал</button>
+  <button class="tbtn" id="bHelp" type="button">Справка</button>
+</div>
+
+<div class="wrap">
+  <div>
+    <div class="device" id="device">
+      <div class="pwr-row"><div class="k pwr" data-k="pwr" role="button" tabindex="0">PWR · LIGHT</div></div>
+      <div class="face">
+        <div class="k side pin" data-k="pin" role="button" tabindex="0"><span class="glyph">▲</span>PIN<small>левый</small></div>
+        <div class="lcd" id="lcd">
+          <svg class="ring" viewBox="0 0 300 260" id="ring" aria-hidden="true"></svg>
+          <div class="ico mode"><span id="icStart">START</span><span id="icRace">RACE</span></div>
+          <div class="row r1" id="r1"><span class="v" id="v1">5:00</span><span class="lab" id="lab1"></span></div>
+          <div class="row r2" id="r2"><span class="v" id="v2">---</span><span class="lab" id="lab2"></span></div>
+          <div class="ends"><div class="hc l" id="hcL"></div><div class="ln off" id="hcLine"></div><div class="hc r" id="hcR"></div></div>
+          <div class="status">
+            <span class="bat" id="bat"><i></i><i></i></span>
+            <span id="usb" class="off">USB</span>
+            <span id="gpsI" class="off">GPS</span>
+            <span id="srch" class="off">ПОИСК</span>
+            <span id="pingI"></span>
+            <span class="sp" id="accI"></span>
+          </div>
+          <div class="offscreen" id="offscreen"><b>Прибор выключен</b>Нажмите PWR, чтобы включить.<br>Браузер попросит доступ к GPS и датчикам.</div>
+        </div>
+        <div class="k side rc" data-k="rc" role="button" tabindex="0"><span class="glyph">■</span>RC<small>судно</small></div>
+      </div>
+      <div class="keys">
+        <div class="k" data-k="mode" role="button" tabindex="0">MODE<small>старт/гонка</small></div>
+        <div class="k" data-k="max" role="button" tabindex="0">MAX<small>рекорды</small></div>
+        <div class="k" data-k="reset" role="button" tabindex="0">RESET<small>3 с — меню</small></div>
+        <div class="k" data-k="plus" role="button" tabindex="0">+1<small>минута</small></div>
+      </div>
+      <div class="k gun" data-k="gun" role="button" tabindex="0">GUN<small>старт · синхронизация</small></div>
+      <div class="combos">
+        <button type="button" data-combo="mode+max">Квадрат к линии<span>MODE + MAX</span></button>
+        <button type="button" data-combo="pin+rc">Стереть линию<span>PIN + RC</span></button>
+        <button type="button" data-combo="mode+plus">Bonus-экран<span>MODE + +1</span></button>
+        <button type="button" data-combo="max+reset">Сбросить рекорды<span>MAX + RESET</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <section class="panel">
+      <h2>Карта линии <span class="sp" id="mapScale"></span></h2>
+      <canvas id="map" width="640" height="480"></canvas>
+      <div class="readout">
+        <div><span>До линии</span><b id="roDtl">—</b></div>
+        <div><span>Длина линии</span><b id="roLen">—</b></div>
+        <div><span>Прогноз на сигнал</span><b id="roProj">—</b></div>
+        <div><span>Время до линии</span><b id="roTtl">—</b></div>
+      </div>
+      <p class="note" id="mapNote">Положительная дистанция — вы перед линией, отрицательная — за линией.</p>
+    </section>
+
+    <section class="panel" id="simPanel">
+      <h2>Симулятор <span class="sp"><label class="chk"><input type="checkbox" id="simOn"> включён</label></span></h2>
+      <div class="simctl" id="simCtl">
+        <div class="r"><span style="min-width:110px">Скорость <b id="simSpdV">4.0</b> уз</span><input type="range" id="simSpd" min="0" max="8" step="0.1" value="4"></div>
+        <div class="r">
+          <button class="btn" type="button" id="simL">◀ 5°</button>
+          <button class="btn" type="button" id="simR">5° ▶</button>
+          <button class="btn" type="button" id="simTack">Поворот</button>
+          <label class="chk"><input type="checkbox" id="simAuto" checked> держать бейдевинд</label>
+        </div>
+        <div class="r">
+          <button class="btn acc" type="button" id="simLine">Задать линию по знакам</button>
+          <button class="btn" type="button" id="simHome">Вернуть лодку в предстарт</button>
+        </div>
+        <p class="note">Без GPS приложение показывает виртуальную лодку: ветер с севера, колеблется ±10°. Знаки линии нарисованы на карте пунктиром. Клавиши ← → рулят, T — поворот.</p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="sheet" id="shSettings" hidden>
+  <div class="box" role="dialog" aria-labelledby="stTitle">
+    <h3 id="stTitle">Настройки <span class="sp"></span><button class="btn" type="button" data-close>Готово</button></h3>
+    <p class="note">Меняются сразу и сохраняются в этом браузере. На приборе меню открывается удержанием RESET 3 секунды.</p>
+    <div id="setList"></div>
+  </div>
+</div>
+
+<!-- log -->
+<div class="sheet" id="shLog" hidden>
+  <div class="box" role="dialog" aria-labelledby="lgTitle">
+    <h3 id="lgTitle">Журнал треков <span class="sp"></span><button class="btn" type="button" data-close>Закрыть</button></h3>
+    <p class="note">Запись 4 раза в секунду с момента включения: координаты, скорость, курс, COG, крен, дифферент, скорость поворота, дистанция до линии и события таймера. Хранится в браузере на этом устройстве.</p>
+    <div class="loglist" id="logList"></div>
+  </div>
+</div>
+
+<!-- help -->
+<div class="sheet" id="shHelp" hidden>
+  <div class="box help" role="dialog" aria-labelledby="hpTitle">
+    <h3 id="hpTitle">Справка <span class="sp"></span><button class="btn" type="button" data-close>Закрыть</button></h3>
+    <h4>Перед стартом</h4>
+    <ol>
+      <li>PWR — включить, дождаться значка GPS.</li>
+      <li>Проверить поправку на нос в настройках.</li>
+      <li>Пройти носом через правый конец — RC, через левый — PIN. Между полукружиями появится линия.</li>
+      <li>MODE + MAX — пеленг перпендикуляра к линии. Ветер правее — выгоднее судно, левее — пин.</li>
+      <li>+1 — длительность отсчёта (1–15 мин).</li>
+      <li>По сигналу комитета — GUN. На следующих сигналах GUN округляет таймер вниз до целой минуты.</li>
+      <li>Последние 2 минуты: сегменты сверху — придёте рано, снизу — поздно, 1 сегмент = 2 м.</li>
+      <li>Через 10 с после старта прибор сам переходит в гоночный режим.</li>
+    </ol>
+    <h4>Кнопки и клавиатура</h4>
+    <div class="tablewrap"><table>
+      <tr><td>Q / PIN</td><td>левый конец линии (в режиме без GPS — опорный курс левого галса)</td></tr>
+      <tr><td>P / RC</td><td>правый конец линии (без GPS — опорный курс правого галса)</td></tr>
+      <tr><td>Пробел / GUN</td><td>запуск, синхронизация, стоп/перезапуск счёта вперёд</td></tr>
+      <tr><td>1 / +1</td><td>выбор длительности или +1 минута во время отсчёта</td></tr>
+      <tr><td>R / RESET</td><td>сброс таймера; в гонке — обнуление крена или опорного угла сдвигов; удержание 3 с — настройки</td></tr>
+      <tr><td>M / MODE</td><td>Start ⇄ Race</td></tr>
+      <tr><td>X / MAX</td><td>максимальная и лучшая 10-секундная скорость</td></tr>
+      <tr><td>L / PWR</td><td>подсветка: выкл → белая → красная; удержание 3 с — выключение</td></tr>
+      <tr><td>Две кнопки</td><td>PIN+RC стереть линию · MODE+MAX квадрат к линии · MODE+(+1) Bonus · MAX+RESET сброс рекордов. Можно нажать двумя пальцами или кнопками под прибором.</td></tr>
+    </table></div>
+    <h4>Телефон на лодке</h4>
+    <p>Геолокация и компас работают только по HTTPS (или на localhost). Положите файл на любой статический хостинг — GitHub Pages, Netlify — и откройте с телефона. Экран не гаснет, пока прибор включён. Компас телефона рассчитан на установку экраном к рулевому, задней стороной к носу; разворот компенсирует «Поправка курса». Магнитное склонение задаётся вручную.</p>
+    <p>Это тактический помощник, не навигационный прибор.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const KN = 1.943844, R_EARTH = 6371008.8, D2R = Math.PI / 180;
+const wrap180 = a => ((a % 360) + 540) % 360 - 180;
+const wrap360 = a => ((a % 360) + 360) % 360;
+const pad3 = h => String(Math.round(wrap360(h)) % 360).padStart(3, '0');
+const fmtMS = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+
+function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? { ...d, ...v } : { ...d }; } catch (e) { return { ...d }; } }
+function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+// ---------------- settings ----------------
+const DEFAULTS = {
+  dir: 'hdg', bar: 'heel', timerMode: 'reset', damp: 0, hdgOffset: 0, decl: 0,
+  dtl: true, bow: 0, prec: 1, gps: true, bonus: false, bonusTop: 'hdg', bonusBot: 'cog', bonusBar: 'heel',
+  dur: 5, sim: false, heelInvert: false, sound: false
+};
+let S = load('sl.settings', DEFAULTS);
+const saveS = () => save('sl.settings', S);
+
+// ---------------- state ----------------
+const st = {
+  on: false, mode: 'start', bonusFrom: 'start', overlay: null, overlayUntil: 0, msg: '', light: 0,
+  origin: null, pin: null, rc: null, pingFlash: null,
+  fix: null, compass: null, hdgVec: null,
+  heelRaw: null, pitchRaw: null, heelZero: 0, pitchZero: 0,
+  shift: { buf: [], trim: null, disp: 0 }, refs: { port: null, stbd: null },
+  max: load('sl.max', { inst: 0, best10: 0 }), speeds: [],
+  lastHdg: null, rot: 0, trail: [], battery: null, wake: null, gpsWatch: null, gpsErr: '', frame: 0
+};
+const T = { state: 'stopped', end: 0, cuStart: 0, cuElapsed: 0, post: 0, raceSwitched: true, lastSec: null };
+(() => { const l = load('sl.line', {}); if (!S.sim && l.origin) { st.origin = l.origin; st.pin = l.pin || null; st.rc = l.rc || null; } })();
+const saveLine = () => { if (!S.sim) save('sl.line', { origin: st.origin, pin: st.pin, rc: st.rc }); };
+
+// ---------------- geometry ----------------
+function toENU(lat, lon) {
+  if (!st.origin) st.origin = { lat, lon };
+  const o = st.origin;
+  return { x: (lon - o.lon) * D2R * R_EARTH * Math.cos(o.lat * D2R), y: (lat - o.lat) * D2R * R_EARTH };
+}
+function fromENU(x, y) {
+  const o = st.origin;
+  return { lat: o.lat + y / R_EARTH / D2R, lon: o.lon + x / (R_EARTH * Math.cos(o.lat * D2R)) / D2R };
+}
+const gpsFix = () => (st.fix && Date.now() - st.fix.t < 4000) ? st.fix : null;
+function magHeading() {
+  if (!st.hdgVec) return null;
+  return wrap360(Math.atan2(st.hdgVec[0], st.hdgVec[1]) / D2R + S.hdgOffset);
+}
+function cogMag() {
+  const f = gpsFix();
+  if (!f || f.sog * KN < 0.5 || f.cog == null) return null;
+  return wrap360(f.cog - S.decl);
+}
+function trueDir() {
+  const h = magHeading(); if (h != null) return wrap360(h + S.decl);
+  const f = gpsFix(); return f && f.cog != null ? f.cog : null;
+}
+// position of the bow, dead-reckoned between GPS fixes so the 4 Hz display stays smooth
+function bowPos(now) {
+  const f = gpsFix(); if (!f) return null;
+  const dt = Math.min((now - f.t) / 1000, 2);
+  let x = f.x, y = f.y;
+  if (f.cog != null && f.sog > 0.1) { x += Math.sin(f.cog * D2R) * f.sog * dt; y += Math.cos(f.cog * D2R) * f.sog * dt; }
+  if (S.bow > 0) { const d = trueDir(); if (d != null) { x += Math.sin(d * D2R) * S.bow; y += Math.cos(d * D2R) * S.bow; } }
+  return { x, y };
+}
+const lineSet = () => !!(st.pin && st.rc && Math.hypot(st.rc.x - st.pin.x, st.rc.y - st.pin.y) >= 1);
+// perpendicular distance to the infinite line PIN→RC; positive = pre-start side (RC is the right end looking upwind)
+function dtl(p) {
+  if (!lineSet() || !p) return null;
+  const ux = st.rc.x - st.pin.x, uy = st.rc.y - st.pin.y, L = Math.hypot(ux, uy);
+  const px = p.x - st.pin.x, py = p.y - st.pin.y;
+  return -(ux * py - uy * px) / L;
+}
+function lineSquareTo() {
+  if (!lineSet()) return null;
+  const b = Math.atan2(st.pin.x - st.rc.x, st.pin.y - st.rc.y) / D2R; // true bearing RC → PIN
+  return wrap360(b + 90 - S.decl);
+}
+function velocity() {
+  const f = gpsFix(); if (!f || f.cog == null) return null;
+  return { vx: Math.sin(f.cog * D2R) * f.sog, vy: Math.cos(f.cog * D2R) * f.sog };
+}
+function projectedAtGun(now) {
+  if (T.state !== 'running') return null;
+  const rem = (T.end - now) / 1000; if (rem > 120 || rem < 0) return null;
+  const p = bowPos(now), v = velocity(); if (!p || !v || !lineSet()) return null;
+  const q = { x: p.x + v.vx * rem, y: p.y + v.vy * rem };
+  return { p: q, d: dtl(q) };
+}
+
+// ---------------- GPS fixes ----------------
+function onFix(lat, lon, acc, speed, heading) {
+  const t = Date.now(), p = toENU(lat, lon), pf = st.fix;
+  let sog = (speed != null && !isNaN(speed)) ? speed : null;
+  let cog = (heading != null && !isNaN(heading) && sog != null && sog > 0.15) ? heading : null;
+  if (pf && t > pf.t) {
+    const dt = (t - pf.t) / 1000, dx = p.x - pf.x, dy = p.y - pf.y, d = Math.hypot(dx, dy);
+    if (sog == null) sog = d / dt;
+    if (cog == null && d > 0.4) cog = wrap360(Math.atan2(dx, dy) / D2R);
+  }
+  if (sog == null) sog = 0;
+  if (cog == null && pf && sog > 0.15) cog = pf.cog;
+  st.fix = { x: p.x, y: p.y, lat, lon, acc, sog, cog, t };
+}
+
+// ---------------- sensors ----------------
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const screenAngle = () => (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
+function onOrientation(e) {
+  if (S.sim) return;
+  let h = null;
+  if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;
+  else if (e.absolute || e.type === 'deviceorientationabsolute') {
+    if (e.alpha == null) return;
+    const a = e.alpha * D2R, b = (e.beta || 0) * D2R, g = (e.gamma || 0) * D2R;
+    if (Math.abs(e.beta || 0) < 45) h = 360 - e.alpha; // lying flat: heading of the top edge
+    else {                                              // upright: heading of the back of the phone
+      const rA = -Math.cos(a) * Math.sin(g) - Math.sin(a) * Math.sin(b) * Math.cos(g);
+      const rB = -Math.sin(a) * Math.sin(g) + Math.cos(a) * Math.sin(b) * Math.cos(g);
+      h = Math.atan2(rA, rB) / D2R;
+    }
+  }
+  if (h == null) return;
+  st.compass = wrap360(h + screenAngle());
+}
+function onMotion(e) {
+  if (S.sim) return;
+  const g = e.accelerationIncludingGravity; if (!g || g.x == null) return;
+  const a = screenAngle() * D2R, sgn = isIOS ? -1 : 1;
+  const x = sgn * g.x, y = sgn * g.y, z = sgn * g.z;
+  const xs = x * Math.cos(a) - y * Math.sin(a), ys = x * Math.sin(a) + y * Math.cos(a);
+  const heel = Math.atan2(-xs, ys) / D2R, pitch = Math.atan2(z, ys) / D2R;
+  st.heelRaw = st.heelRaw == null ? heel : st.heelRaw + (heel - st.heelRaw) * 0.15;
+  st.pitchRaw = st.pitchRaw == null ? pitch : st.pitchRaw + (pitch - st.pitchRaw) * 0.15;
+}
+const heel = () => st.heelRaw == null ? null : (st.heelRaw - st.heelZero) * (S.heelInvert ? -1 : 1);
+const pitch = () => st.pitchRaw == null ? null : st.pitchRaw - st.pitchZero;
+
+function startSensors() {
+  // permission prompts on iOS must be issued synchronously inside the tap
+  const pO = (window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission) ? DeviceOrientationEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
+  const pM = (window.DeviceMotionEvent && DeviceMotionEvent.requestPermission) ? DeviceMotionEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
+  pO.then(r => { if (r !== 'granted') return; if ('ondeviceorientationabsolute' in window) addEventListener('deviceorientationabsolute', onOrientation); else addEventListener('deviceorientation', onOrientation); });
+  pM.then(r => { if (r === 'granted') addEventListener('devicemotion', onMotion); });
+  restartGPS();
+  requestWake();
+  if (navigator.getBattery) navigator.getBattery().then(b => { st.battery = b; }).catch(() => {});
+}
+function restartGPS() {
+  if (st.gpsWatch != null && navigator.geolocation) { navigator.geolocation.clearWatch(st.gpsWatch); st.gpsWatch = null; }
+  if (!st.on || S.sim || !S.gps) return;
+  if (!navigator.geolocation) { st.gpsErr = 'нет GPS'; return; }
+  st.gpsWatch = navigator.geolocation.watchPosition(
+    p => { st.gpsErr = ''; onFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.coords.speed, p.coords.heading); },
+    e => { st.gpsErr = e.code === 1 ? 'нет доступа к GPS' : 'GPS: ' + e.message; },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+}
+async function requestWake() {
+  try { if (navigator.wakeLock && st.on && document.visibilityState === 'visible') st.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') requestWake(); });
+
+// ---------------- sound ----------------
+let actx = null;
+function beep(freq, ms) {
+  if (!S.sound) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = freq; o.type = 'square'; g.gain.value = 0.08;
+    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + ms / 1000);
+  } catch (e) {}
+}
+
+// ---------------- simulator ----------------
+const SIM_ORIGIN = { lat: 59.9235, lon: 30.2050 };
+const SIM_PIN = { x: -130, y: 0 }, SIM_RC = { x: 130, y: 18 };
+const sim = { x: 10, y: -220, hdg: 40, spd: 4, auto: true, tack: 'port', t0: Date.now(), lastFix: 0 };
+const simWind = now => { const t = (now - sim.t0) / 1000; return wrap360(7 * Math.sin(2 * Math.PI * t / 180) + 3 * Math.sin(2 * Math.PI * t / 47)); };
+const noise = a => (Math.random() * 2 - 1) * a;
+function simStep(now, dt) {
+  const w = simWind(now);
+  if (sim.auto) { const target = sim.tack === 'port' ? w + 42 : w - 42; sim.hdg = wrap360(sim.hdg + wrap180(target - sim.hdg) * Math.min(1, dt * 1.2)); }
+  else { const rel = wrap180(sim.hdg - w); sim.tack = rel >= 0 ? 'port' : 'stbd'; }
+  const v = sim.spd / KN;
+  sim.x += Math.sin(sim.hdg * D2R) * v * dt; sim.y += Math.cos(sim.hdg * D2R) * v * dt;
+  st.compass = wrap360(sim.hdg - S.decl - S.hdgOffset + noise(1.5));
+  st.heelRaw = (sim.tack === 'port' ? 1 : -1) * (4 + sim.spd * 1.3) + noise(1.2);
+  st.pitchRaw = 1.5 + noise(0.8);
+  if (S.gps && now - sim.lastFix >= 1000) {
+    sim.lastFix = now;
+    const ll = fromENU(sim.x + noise(0.4), sim.y + noise(0.4));
+    onFix(ll.lat, ll.lon, 3, v + noise(0.03), wrap360(sim.hdg + noise(1)));
+  }
+}
+function setSim(on) {
+  S.sim = on; saveS();
+  st.fix = null; st.pin = st.rc = null; st.trail = []; st.hdgVec = null; st.compass = null; st.heelRaw = null;
+  if (on) { st.origin = { ...SIM_ORIGIN }; sim.t0 = Date.now(); }
+  else { const l = load('sl.line', {}); st.origin = l.origin || null; st.pin = l.pin || null; st.rc = l.rc || null; }
+  restartGPS(); syncSimUI(); render();
+}
+
+// ---------------- logging (IndexedDB) ----------------
+let db = null, logSid = null, logBuf = [], logRows = 0;
+function openDB() {
+  return new Promise((res, rej) => {
+    if (!window.indexedDB) return rej(new Error('no idb'));
+    const r = indexedDB.open('startline-log', 1);
+    r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('sessions', { keyPath: 'id' }); d.createObjectStore('chunks', { autoIncrement: true }).createIndex('sid', 'sid'); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+const idbReq = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function logStart() {
+  try { db = db || await openDB(); } catch (e) { db = null; return; }
+  logSid = Date.now(); logRows = 0; logBuf = [];
+  try { await idbReq(db.transaction('sessions', 'readwrite').objectStore('sessions').put({ id: logSid, start: logSid, end: logSid, rows: 0, sim: S.sim })); } catch (e) {}
+}
+function logRow(ev) {
+  if (!logSid) return;
+  const f = gpsFix(), now = Date.now(), h = magHeading(), he = heel(), pi = pitch(), d = dtl(bowPos(now));
+  const r = (v, n) => v == null ? '' : +v.toFixed(n);
+  logBuf.push([now, f ? r(f.lat, 7) : '', f ? r(f.lon, 7) : '', f ? r(f.sog * KN, 2) : '', f && f.cog != null ? r(f.cog, 1) : '',
+    r(h, 1), r(he, 1), r(pi, 1), r(st.rot, 1), r(d, 1), timerText(now), ev || '']);
+}
+async function logFlush() {
+  if (!db || !logSid || !logBuf.length) return;
+  const rows = logBuf; logBuf = []; logRows += rows.length;
+  try {
+    const tx = db.transaction(['chunks', 'sessions'], 'readwrite');
+    tx.objectStore('chunks').add({ sid: logSid, rows });
+    tx.objectStore('sessions').put({ id: logSid, start: logSid, end: Date.now(), rows: logRows, sim: S.sim });
+  } catch (e) {}
+}
+setInterval(logFlush, 5000);
+addEventListener('pagehide', logFlush);
+async function logRowsOf(sid) {
+  const all = await idbReq(db.transaction('chunks').objectStore('chunks').index('sid').getAll(sid));
+  return all.flatMap(c => c.rows);
+}
+const COLS = ['time_iso', 'lat', 'lon', 'sog_kn', 'cog_true', 'heading_mag', 'heel', 'pitch', 'rate_of_turn', 'dist_to_line_m', 'timer', 'event'];
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+async function exportLog(sid, kind) {
+  await logFlush();
+  const rows = await logRowsOf(sid), stamp = new Date(sid).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  if (kind === 'csv') {
+    const body = rows.map(r => [new Date(r[0]).toISOString(), ...r.slice(1)].join(',')).join('\n');
+    download('track-' + stamp + '.csv', COLS.join(',') + '\n' + body, 'text/csv');
+  } else {
+    const pts = rows.filter(r => r[1] !== '' && !r[11]).map(r =>
+      `<trkpt lat="${r[1]}" lon="${r[2]}"><time>${new Date(r[0]).toISOString()}</time>${r[4] !== '' ? `<course>${r[4]}</course>` : ''}<speed>${r[3] === '' ? 0 : (r[3] / KN).toFixed(2)}</speed></trkpt>`).join('\n');
+    download('track-' + stamp + '.gpx', `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Start-Line" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>${stamp}</name><trkseg>\n${pts}\n</trkseg></trk></gpx>`, 'application/gpx+xml');
+  }
+}
+
+// ---------------- timer ----------------
+function timerText(now) {
+  if (T.state === 'countup') return ((now - T.cuStart) / 60000).toFixed(1);
+  if (T.state === 'cuStopped') return (T.cuElapsed / 60000).toFixed(1);
+  if (T.post && now < T.post && T.state !== 'running') return '0:00';
+  if (T.state === 'running') return fmtMS(Math.max(0, Math.ceil((T.end - now) / 1000)));
+  return fmtMS(S.dur * 60);
+}
+function gun() {
+  const now = Date.now();
+  if (T.state === 'stopped') { T.end = now + S.dur * 60000; T.state = 'running'; T.post = 0; T.raceSwitched = true; logRow('gun_start'); beep(1200, 120); }
+  else if (T.state === 'running') { const m = Math.floor((T.end - now) / 60000); T.end = now + m * 60000; logRow('gun_sync'); beep(1200, 80); }
+  else if (T.state === 'countup') { T.cuElapsed = now - T.cuStart; T.state = 'cuStopped'; logRow('countup_stop'); }
+  else if (T.state === 'cuStopped') { T.cuStart = now; T.cuElapsed = 0; T.state = 'countup'; logRow('countup_start'); }
+}
+function plusOne() {
+  if (T.state === 'running') { T.end += 60000; logRow('plus_minute'); }
+  else if (T.state === 'stopped') { S.dur = S.dur % 15 + 1; saveS(); logRow('set_' + S.dur + 'min'); }
+}
+function timerReset() { T.state = 'stopped'; T.post = 0; T.raceSwitched = true; logRow('timer_reset'); }
+function timerTick(now) {
+  if (T.state === 'running') {
+    const s = Math.max(0, Math.ceil((T.end - now) / 1000));
+    if (s !== T.lastSec) { if (T.lastSec != null && s > 0 && (s <= 10 || s % 60 === 0)) beep(s % 60 === 0 ? 1000 : 1500, s % 60 === 0 ? 250 : 60); T.lastSec = s; }
+    if (now >= T.end) {
+      const endT = T.end; logRow('start_signal'); beep(900, 700);
+      T.post = endT + 10000; T.raceSwitched = false; T.lastSec = null;
+      if (S.timerMode === 'rolling') T.end = endT + S.dur * 60000;
+      else if (S.timerMode === 'countup') { T.state = 'countup'; T.cuStart = endT; }
+      else T.state = 'stopped';
+    }
+  }
+  if (!T.raceSwitched && T.post && now >= T.post) { T.raceSwitched = true; if (st.mode === 'start') st.mode = 'race'; }
+}
+
+// ---------------- per-tick computation (4 Hz) ----------------
+function compassTick() {
+  if (st.compass == null) return;
+  const v = [Math.sin(st.compass * D2R), Math.cos(st.compass * D2R)], a = [1, 0.35, 0.12][S.damp] ?? 1;
+  st.hdgVec = st.hdgVec ? [st.hdgVec[0] + (v[0] - st.hdgVec[0]) * a, st.hdgVec[1] + (v[1] - st.hdgVec[1]) * a] : v;
+  const h = magHeading();
+  if (st.lastHdg != null) st.rot = st.rot + (wrap180(h - st.lastHdg) / 0.25 - st.rot) * 0.3;
+  st.lastHdg = h;
+}
+const shiftHeading = () => magHeading() ?? cogMag();
+function shiftTick() {
+  const h = shiftHeading(), s = st.shift;
+  if (h == null) return;
+  if (s.trim == null) {
+    s.buf.push(h); if (s.buf.length > 40) s.buf.shift();
+    if (s.buf.length >= 40) {
+      const sx = s.buf.reduce((a, x) => a + Math.sin(x * D2R), 0), cx = s.buf.reduce((a, x) => a + Math.cos(x * D2R), 0);
+      const mean = wrap360(Math.atan2(sx, cx) / D2R), spread = Math.max(...s.buf.map(x => Math.abs(wrap180(x - mean))));
+      if (spread < 7) { s.trim = mean; s.disp = 0; }
+    }
+  } else {
+    const d = wrap180(h - s.trim);
+    if (Math.abs(d) > 45) { s.trim = null; s.buf = []; s.disp = 0; }
+    else s.disp += (d - s.disp) * 0.12;
+  }
+}
+// manual tack references (GPS off / SHIFT mode): lift is always +, header always -
+function manualShift() {
+  const h = magHeading(); if (h == null) return null;
+  let best = null;
+  for (const tack of ['port', 'stbd']) {
+    const ref = st.refs[tack]; if (ref == null) continue;
+    const d = wrap180(h - ref);
+    if (Math.abs(d) <= 25 && (!best || Math.abs(d) < Math.abs(best.d))) best = { tack, d };
+  }
+  if (!best) return null;
+  return { raw: best.d, lift: best.tack === 'stbd' ? best.d : -best.d };
+}
+function maxTick(now) {
+  const f = gpsFix(); if (!f) return;
+  st.speeds.push({ t: now, v: f.sog * KN });
+  while (st.speeds.length && now - st.speeds[0].t > 10500) st.speeds.shift();
+  const avg = span => { const a = st.speeds.filter(s => now - s.t <= span); return a.reduce((x, s) => x + s.v, 0) / a.length; };
+  let ch = false;
+  const a2 = avg(2000); if (a2 > st.max.inst) { st.max.inst = a2; ch = true; }
+  if (now - st.speeds[0].t >= 9500) { const a10 = avg(10000); if (a10 > st.max.best10) { st.max.best10 = a10; ch = true; } }
+  if (ch && st.frame % 8 === 0) save('sl.max', st.max);
+}
+function resetMax() { st.max = { inst: 0, best10: 0 }; st.speeds = []; save('sl.max', st.max); }
+
+let lastTick = Date.now();
+function tick() {
+  const now = Date.now(), dt = Math.min(1, (now - lastTick) / 1000); lastTick = now;
+  st.frame++;
+  if (!st.on) return;
+  if (S.sim) simStep(now, dt);
+  compassTick(); shiftTick(); maxTick(now); timerTick(now);
+  if (st.overlay && now > st.overlayUntil) st.overlay = null;
+  if (st.pingFlash && now > st.pingFlash.until) st.pingFlash = null;
+  if (st.frame % 2 === 0) { const p = bowPos(now); if (p) { st.trail.push(p); if (st.trail.length > 480) st.trail.shift(); } }
+  logRow('');
+  render();
+}
+setInterval(tick, 250);
+
+// ---------------- display ----------------
+const KINDS = { hdg: 'Курс', cog: 'COG', spd: 'Скорость', heel: 'Крен', pitch: 'Дифферент', shift: 'Сдвиг' };
+function val(kind, now) {
+  const f = gpsFix();
+  switch (kind) {
+    case 'hdg': { const h = magHeading(); return { t: h == null ? '---' : pad3(h), l: 'HDG' }; }
+    case 'cog': { if (!S.gps) return { t: '---', l: 'COG' }; const c = cogMag(); return { t: c == null ? '---' : String(Math.round(c) % 360), l: 'COG' }; }
+    case 'spd': return { t: (S.gps && f) ? (f.sog * KN).toFixed(1) : '---', l: 'SPD' };
+    case 'heel': { const h = heel(); return { t: h == null ? '---' : (h > 0.5 ? '+' : '') + Math.round(h), l: 'HEEL' }; }
+    case 'pitch': { const p = pitch(); return { t: p == null ? '---' : (p > 0.5 ? '+' : '') + Math.round(p), l: 'PTCH' }; }
+    case 'shift': {
+      if (!S.gps) { const m = manualShift(); return { t: m ? (m.lift > 0.5 ? '+' : '') + Math.round(m.lift) : '---', l: 'SHFT' }; }
+      return { t: st.shift.trim == null ? '---' : (st.shift.disp > 0.5 ? '+' : '') + Math.round(st.shift.disp), l: 'SHFT' };
+    }
+    case 'timer': return { t: timerText(now), l: 'TMR' };
+    case 'dtl': {
+      const d = dtl(bowPos(now));
+      let t = '---';
+      if (d != null) t = d > 999 ? '>999' : d < -999 ? '<-999' : d.toFixed(S.prec && Math.abs(d) < 100 ? 1 : 0);
+      return { t, l: 'DST' };
+    }
+  }
+}
+function rows(now) {
+  if (st.overlay === 'max') return [{ t: st.max.inst.toFixed(1), l: 'MAX' }, { t: st.max.best10.toFixed(1), l: '10S' }];
+  if (st.overlay === 'lsq') return [{ t: pad3(lineSquareTo()), l: 'HDG' }, { t: 'LSq', l: '' }];
+  let r;
+  if (st.mode === 'bonus') r = [val(S.bonusTop, now), val(S.bonusBot, now)];
+  else if (!S.gps) r = st.mode === 'start' ? [val('timer', now), val('hdg', now)] : [val('hdg', now), val('shift', now)];
+  else if (st.mode === 'start') r = [val('timer', now), S.dtl ? val('dtl', now) : val('spd', now)];
+  else r = [val(S.dir === 'cog' ? 'cog' : 'hdg', now), val('spd', now)];
+  if (st.overlay === 'msg') r[1] = { t: st.msg, l: '' };
+  return r;
+}
+
+// ring of segments around the screen: index 0 is top centre, counting clockwise
+const N = 48, ringPaths = [];
+let ringLen = 0, ringArrow = null;
+(function buildRing() {
+  const svg = $('#ring'), NS = 'http://www.w3.org/2000/svg';
+  const d = 'M150,10 H266 A24,24 0 0 1 290,34 V226 A24,24 0 0 1 266,250 H34 A24,24 0 0 1 10,226 V34 A24,24 0 0 1 34,10 Z';
+  const probe = document.createElementNS(NS, 'path'); probe.setAttribute('d', d); svg.appendChild(probe);
+  ringLen = probe.getTotalLength(); probe.remove();
+  const seg = ringLen / N;
+  for (let i = 0; i < N; i++) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('stroke-dasharray', `${seg * 0.74} ${ringLen}`);
+    p.setAttribute('stroke-dashoffset', String(-(i * seg + seg * 0.13)));
+    p.setAttribute('class', 'off');
+    svg.appendChild(p); ringPaths.push(p);
+  }
+  ringArrow = document.createElementNS(NS, 'path');
+  ringArrow.setAttribute('d', 'M150,22 l-7,10 h14 z'); ringArrow.setAttribute('class', 'arrow off');
+  svg.appendChild(ringArrow);
+})();
+const Q = N / 4, MAXSIDE = Q;
+function barSegments(now) {
+  const on = new Set(); let arrow = false;
+  const signed = (n) => { const k = Math.min(MAXSIDE, Math.abs(n)); for (let i = 0; i < k; i++) on.add(n > 0 ? i : N - 1 - i); };
+  if (st.overlay === 'max' || st.overlay === 'lsq') return { on, arrow };
+  if (S.gps && !gpsFix() && st.mode !== 'bonus') {           // GPS search: segments chase round the ring
+    const h = (st.frame) % N; for (let k = 0; k < 4; k++) on.add((h + k) % N); return { on, arrow };
+  }
+  if (!S.gps) {
+    if (st.mode === 'race') { const m = manualShift(); if (m) signed(Math.round(m.raw / 3)); arrow = !!m; }
+    return { on, arrow };
+  }
+  if (st.mode === 'start') {
+    const pr = projectedAtGun(now);
+    if (pr && pr.d != null) {
+      const late = pr.d >= 2, early = pr.d < 0;
+      const k = Math.min(Q, late ? Math.floor(pr.d / 2) : early ? Math.ceil(-pr.d / 2) : 0);
+      for (let i = 0; i < k; i++) {
+        if (early) { on.add(Q - 1 - i); on.add(3 * Q + i); }  // above the drawn line
+        else { on.add(Q + i); on.add(3 * Q - 1 - i); }       // below the drawn line
+      }
+    }
+    return { on, arrow };
+  }
+  const kind = st.mode === 'bonus' ? S.bonusBar : S.bar;
+  if (kind === 'heel') { const h = heel(); if (h != null) signed(Math.round(h / 2.5)); }
+  else if (kind === 'shift') { if (st.shift.trim != null) { arrow = true; signed(Math.round(st.shift.disp / 3)); } }
+  return { on, arrow };
+}
+
+const el = { v1: $('#v1'), v2: $('#v2'), lab1: $('#lab1'), lab2: $('#lab2'), r1: $('#r1'), r2: $('#r2') };
+const LABELS = ['SPD', 'HDG', 'TMR', 'DST'];
+function setRow(rowEl, vEl, labEl, r) {
+  if (vEl.textContent !== r.t) vEl.textContent = r.t;
+  rowEl.classList.toggle('small', r.t.length > 5);
+  const lab = r.l === 'COG' ? 'HDG' : r.l;
+  const extra = LABELS.includes(lab) || !r.l ? '' : r.l;
+  labEl.innerHTML = LABELS.map(x => `<span class="${x === lab ? 'on' : ''}">${x}</span>`).join('') + (extra ? `<span class="on">${extra}</span>` : '');
+}
+function render() {
+  const now = Date.now();
+  document.documentElement.dataset.light = ['', 'white', 'red'][st.light];
+  $('#offscreen').hidden = st.on;
+  if (!st.on) { mapDraw(now); return; }
+  const [a, b] = rows(now);
+  setRow(el.r1, el.v1, el.lab1, a); setRow(el.r2, el.v2, el.lab2, b);
+  $('#icStart').className = st.mode === 'start' ? 'on' : '';
+  $('#icRace').className = st.mode === 'race' ? 'on' : '';
+  // line ends
+  const pinSet = S.gps ? !!st.pin : st.refs.port != null, rcSet = S.gps ? !!st.rc : st.refs.stbd != null;
+  $('#hcL').className = 'hc l' + (pinSet ? '' : ' blink');
+  $('#hcR').className = 'hc r' + (rcSet ? '' : ' blink');
+  $('#hcLine').className = 'ln' + ((S.gps ? lineSet() : (pinSet && rcSet)) ? '' : ' off');
+  // ring
+  const { on, arrow } = barSegments(now);
+  ringPaths.forEach((p, i) => { const c = on.has(i) ? '' : 'off'; if (p.getAttribute('class') !== c) p.setAttribute('class', c); });
+  ringArrow.setAttribute('class', 'arrow' + (arrow ? '' : ' off'));
+  // status line
+  const f = gpsFix(), b2 = st.battery;
+  $('#gpsI').className = S.gps && f ? '' : 'off';
+  $('#srch').className = S.gps && !f ? 'blink' : 'off';
+  $('#srch').textContent = st.gpsErr && !S.sim ? st.gpsErr.toUpperCase() : 'ПОИСК';
+  $('#accI').textContent = !S.gps ? 'SHIFT' : f && f.acc ? '±' + Math.round(f.acc) + ' м' : '';
+  $('#pingI').textContent = st.pingFlash ? (st.pingFlash.which === 'pin' ? '▲ PIN' : '■ RC') : '';
+  $('#pingI').className = st.pingFlash ? 'blink' : '';
+  $('#usb').className = b2 && b2.charging ? (b2.level < 1 ? 'blink' : '') : 'off';
+  const bat = $('#bat'), cells = bat.children;
+  if (b2) {
+    const L = b2.level;
+    cells[0].className = L > 0.2 ? '' : 'off'; cells[1].className = L > 0.6 ? '' : L > 0.4 ? 'blink' : 'off';
+    bat.className = 'bat' + (L <= 0.1 && !b2.charging ? ' blink' : '');
+  }
+  mapDraw(now);
+  readouts(now);
+}
+
+// ---------------- chart ----------------
+const cv = $('#map'), cx = cv.getContext('2d');
+function mapDraw(now) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.fillStyle = '#0d1417'; cx.fillRect(0, 0, W, H);
+  const boat = bowPos(now), pr = projectedAtGun(now);
+  const pts = [];
+  if (st.pin) pts.push(st.pin); if (st.rc) pts.push(st.rc); if (boat) pts.push(boat); if (pr) pts.push(pr.p);
+  if (S.sim) pts.push(SIM_PIN, SIM_RC);
+  if (!pts.length) {
+    cx.fillStyle = '#5b6a70'; cx.font = '14px ' + getComputedStyle(document.body).fontFamily; cx.textAlign = 'center';
+    cx.fillText(st.on ? 'Ждём GPS…' : 'Включите прибор или симулятор', W / 2, H / 2); return;
+  }
+  let minX = Math.min(...pts.map(p => p.x)), maxX = Math.max(...pts.map(p => p.x)), minY = Math.min(...pts.map(p => p.y)), maxY = Math.max(...pts.map(p => p.y));
+  const span = Math.max(160, (maxX - minX) * 1.25, (maxY - minY) * 1.25 * W / H);
+  const cxm = (minX + maxX) / 2, cym = (minY + maxY) / 2, k = W / span;
+  const sx = x => W / 2 + (x - cxm) * k, sy = y => H / 2 - (y - cym) * k;
+  // grid every 50 m
+  cx.strokeStyle = 'rgba(140,170,180,.08)'; cx.lineWidth = 1;
+  const g = span > 800 ? 200 : span > 400 ? 100 : 50;
+  for (let x = Math.floor((cxm - span) / g) * g; x < cxm + span; x += g) { cx.beginPath(); cx.moveTo(sx(x), 0); cx.lineTo(sx(x), H); cx.stroke(); }
+  for (let y = Math.floor((cym - span) / g) * g; y < cym + span; y += g) { cx.beginPath(); cx.moveTo(0, sy(y)); cx.lineTo(W, sy(y)); cx.stroke(); }
+  $('#mapScale').textContent = 'сетка ' + g + ' м';
+  // sim marks
+  if (S.sim) {
+    cx.setLineDash([3, 3]); cx.lineWidth = 1.5;
+    [[SIM_PIN, '#5fb3d9'], [SIM_RC, '#e2675a']].forEach(([m, c]) => { cx.strokeStyle = c; cx.beginPath(); cx.arc(sx(m.x), sy(m.y), 9, 0, 7); cx.stroke(); });
+    cx.setLineDash([]);
+    const w = simWind(now); cx.save(); cx.translate(W - 28, 28); cx.rotate(w * D2R);
+    cx.strokeStyle = '#9fb0b5'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(0, -14); cx.lineTo(0, 14); cx.moveTo(-5, 7); cx.lineTo(0, 14); cx.lineTo(5, 7); cx.stroke(); cx.restore();
+    cx.fillStyle = '#9fb0b5'; cx.font = '11px sans-serif'; cx.textAlign = 'right'; cx.fillText('ветер ' + pad3(w) + '°', W - 8, 58);
+  }
+  // line
+  if (lineSet()) {
+    const ux = st.rc.x - st.pin.x, uy = st.rc.y - st.pin.y, L = Math.hypot(ux, uy), e = span * 2;
+    cx.strokeStyle = 'rgba(240,165,48,.35)'; cx.setLineDash([6, 6]); cx.lineWidth = 1;
+    cx.beginPath(); cx.moveTo(sx(st.pin.x - ux / L * e), sy(st.pin.y - uy / L * e)); cx.lineTo(sx(st.rc.x + ux / L * e), sy(st.rc.y + uy / L * e)); cx.stroke();
+    cx.setLineDash([]); cx.strokeStyle = '#f0a530'; cx.lineWidth = 2.5;
+    cx.beginPath(); cx.moveTo(sx(st.pin.x), sy(st.pin.y)); cx.lineTo(sx(st.rc.x), sy(st.rc.y)); cx.stroke();
+  }
+  if (st.pin) { cx.fillStyle = '#5fb3d9'; const x = sx(st.pin.x), y = sy(st.pin.y); cx.beginPath(); cx.moveTo(x, y - 8); cx.lineTo(x - 7, y + 5); cx.lineTo(x + 7, y + 5); cx.fill(); }
+  if (st.rc) { cx.fillStyle = '#e2675a'; cx.fillRect(sx(st.rc.x) - 6, sy(st.rc.y) - 6, 12, 12); }
+  // trail
+  if (st.trail.length > 1) {
+    cx.strokeStyle = 'rgba(230,235,231,.35)'; cx.lineWidth = 1.5; cx.beginPath();
+    st.trail.forEach((p, i) => i ? cx.lineTo(sx(p.x), sy(p.y)) : cx.moveTo(sx(p.x), sy(p.y))); cx.stroke();
+  }
+  if (pr && boat) {
+    cx.strokeStyle = pr.d < 0 ? '#e2675a' : pr.d >= 2 ? '#5fb3d9' : '#7fd67f'; cx.setLineDash([2, 4]); cx.lineWidth = 1.5;
+    cx.beginPath(); cx.moveTo(sx(boat.x), sy(boat.y)); cx.lineTo(sx(pr.p.x), sy(pr.p.y)); cx.stroke(); cx.setLineDash([]);
+    cx.beginPath(); cx.arc(sx(pr.p.x), sy(pr.p.y), 5, 0, 7); cx.stroke();
+  }
+  if (boat) {
+    const d = trueDir() ?? 0; cx.save(); cx.translate(sx(boat.x), sy(boat.y)); cx.rotate(d * D2R);
+    cx.fillStyle = '#e6ebe7'; cx.beginPath(); cx.moveTo(0, -11); cx.lineTo(6, 8); cx.lineTo(-6, 8); cx.closePath(); cx.fill(); cx.restore();
+  }
+}
+function readouts(now) {
+  const d = dtl(bowPos(now)), f = gpsFix(), pr = projectedAtGun(now), v = velocity();
+  $('#roDtl').textContent = d == null ? '—' : d.toFixed(1) + ' м';
+  $('#roLen').textContent = lineSet() ? Math.hypot(st.rc.x - st.pin.x, st.rc.y - st.pin.y).toFixed(0) + ' м' : '—';
+  $('#roProj').textContent = pr && pr.d != null ? (pr.d < 0 ? 'рано ' + (-pr.d).toFixed(0) + ' м' : pr.d >= 2 ? 'поздно ' + pr.d.toFixed(0) + ' м' : 'в точку') : '—';
+  let ttl = '—';
+  if (d != null && v && lineSet()) {
+    const ux = st.rc.x - st.pin.x, uy = st.rc.y - st.pin.y, L = Math.hypot(ux, uy);
+    const vn = (ux * v.vy - uy * v.vx) / L; // speed toward the course side
+    if (d > 0 && vn > 0.1) ttl = Math.round(d / vn) + ' с';
+  }
+  $('#roTtl').textContent = ttl;
+}
+
+// ---------------- buttons ----------------
+function toStart() { if (st.mode === 'race') st.mode = 'start'; }
+function showOverlay(kind, ms) { st.overlay = kind; st.overlayUntil = Date.now() + ms; }
+function msg(t) { st.msg = t; showOverlay('msg', 1500); }
+function ping(which) {
+  if (!S.gps) {
+    const h = magHeading(); if (h == null) return msg('no HdG');
+    st.refs[which === 'pin' ? 'port' : 'stbd'] = Math.round(h); logRow('ref_' + which); return;
+  }
+  const p = bowPos(Date.now()); if (!p) return msg('no GPS');
+  st[which] = { x: p.x, y: p.y, ...fromENU(p.x, p.y) };
+  st.pingFlash = { which, until: Date.now() + 3000 }; saveLine(); logRow('ping_' + which); beep(1800, 50);
+}
+function raceReset() {
+  if (S.gps && S.bar === 'shift') { st.shift.trim = null; st.shift.buf = []; st.shift.disp = 0; logRow('shift_reset'); }
+  else if (st.heelRaw != null) { st.heelZero = st.heelRaw; st.pitchZero = st.pitchRaw; logRow('heel_zero'); msg('0'); }
+}
+function press(k) {
+  if (k === 'pwr') { if (st.on) { st.light = (st.light + 1) % 3; render(); } return; }
+  if (!st.on) return;
+  if (st.mode === 'bonus') { st.mode = st.bonusFrom; render(); return; }
+  if (st.overlay === 'lsq' && k === 'reset') { st.overlay = null; render(); return; }
+  if (st.overlay === 'max' && k === 'reset') { resetMax(); st.overlay = null; msg('CLr'); render(); return; }
+  if (st.overlay && st.overlay !== 'msg') st.overlay = null;
+  switch (k) {
+    case 'pin': case 'rc': if (S.gps) toStart(); ping(k); break;
+    case 'gun': toStart(); gun(); break;
+    case 'plus': toStart(); plusOne(); break;
+    case 'reset': if (st.mode === 'race') raceReset(); else timerReset(); break;
+    case 'mode': st.mode = st.mode === 'start' ? 'race' : 'start'; break;
+    case 'max': showOverlay('max', 5000); break;
+  }
+  render();
+}
+function combo(c) {
+  if (!st.on) return;
+  if (st.mode === 'bonus') { st.mode = st.bonusFrom; render(); return; }
+  if (c === 'pin+rc') {
+    if (S.gps) { st.pin = st.rc = null; saveLine(); logRow('line_clear'); } else { st.refs = { port: null, stbd: null }; }
+    msg('CLr');
+  } else if (c === 'mode+max') {
+    if (lineSet() && S.gps) showOverlay('lsq', 5000); else msg('noLn');
+  } else if (c === 'mode+plus') {
+    if (S.bonus) { st.bonusFrom = st.mode; st.mode = 'bonus'; st.overlay = null; } else msg('OFF');
+  } else if (c === 'max+reset') { resetMax(); msg('CLr'); }
+  render();
+}
+
+const COMBOS = [['pin', 'rc'], ['mode', 'max'], ['mode', 'plus'], ['max', 'reset']];
+const held = new Map();
+function keyDown(k) {
+  if (k !== 'pwr' && !st.on) return;
+  for (const [a, b] of COMBOS) {
+    const other = k === a ? b : k === b ? a : null;
+    const ho = other && held.get(other);
+    if (ho && !ho.consumed) { ho.consumed = true; clearTimeout(ho.lp); held.set(k, { consumed: true }); combo(a + '+' + b); return; }
+  }
+  const h = { consumed: false }; held.set(k, h);
+  if (k === 'gun') { h.consumed = true; press('gun'); }   // instant: the gun is timed on press, not release
+  if (k === 'reset') h.lp = setTimeout(() => { h.consumed = true; openSheet('shSettings'); }, 3000);
+  if (k === 'pwr' && st.on) h.lp = setTimeout(() => { h.consumed = true; powerOff(); }, 3000);
+}
+function keyUp(k, cancel) {
+  const h = held.get(k); held.delete(k); if (!h) return;
+  clearTimeout(h.lp); if (!h.consumed && !cancel) press(k);
+}
+document.querySelectorAll('.k[data-k]').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (_) {} b.classList.add('down'); keyDown(k); });
+  b.addEventListener('pointerup', () => { b.classList.remove('down'); keyUp(k); });
+  b.addEventListener('pointercancel', () => { b.classList.remove('down'); keyUp(k, true); });
+  b.addEventListener('contextmenu', e => e.preventDefault());
+  b.addEventListener('keydown', e => { if ((e.key === 'Enter') && !e.repeat) { e.preventDefault(); e.stopPropagation(); keyDown(k); } });
+  b.addEventListener('keyup', e => { if (e.key === 'Enter') { e.stopPropagation(); keyUp(k); } });
+});
+// power-on must run inside a click so iOS will show the sensor permission prompt
+$('.k.pwr').addEventListener('click', () => { if (!st.on) powerOn(); });
+$('#offscreen').addEventListener('click', powerOn);
+document.querySelectorAll('[data-combo]').forEach(b => b.addEventListener('click', () => combo(b.dataset.combo)));
+
+const KEYMAP = { q: 'pin', p: 'rc', ' ': 'gun', g: 'gun', '1': 'plus', '=': 'plus', '+': 'plus', m: 'mode', x: 'max', r: 'reset', l: 'pwr' };
+addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input,select,textarea,.sheet')) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (S.sim && st.on) {
+    if (key === 'ArrowLeft') { simSteer(-5); e.preventDefault(); return; }
+    if (key === 'ArrowRight') { simSteer(5); e.preventDefault(); return; }
+    if (key === 't') { simTack(); return; }
+  }
+  const k = KEYMAP[key]; if (!k || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  e.preventDefault();
+  if (k === 'pwr' && !st.on) { powerOn(); return; }
+  document.querySelector(`.k[data-k="${k}"]`)?.classList.add('down');
+  keyDown(k);
+});
+addEventListener('keyup', e => {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key, k = KEYMAP[key]; if (!k) return;
+  document.querySelector(`.k[data-k="${k}"]`)?.classList.remove('down');
+  keyUp(k);
+});
+
+function powerOn() {
+  if (st.on) return;
+  st.on = true; st.mode = 'start'; st.light = 0; st.shift = { buf: [], trim: null, disp: 0 };
+  startSensors(); logStart(); render();
+}
+function powerOff() {
+  logRow('power_off'); logFlush(); logSid = null;
+  st.on = false; st.light = 0; T.state = 'stopped'; T.post = 0;
+  restartGPS();
+  try { st.wake && st.wake.release(); } catch (e) {} st.wake = null;
+  render();
+}
+
+// ---------------- simulator UI ----------------
+function simSteer(d) { sim.auto = false; $('#simAuto').checked = false; sim.hdg = wrap360(sim.hdg + d); }
+function simTack() { const w = simWind(Date.now()); sim.tack = sim.tack === 'port' ? 'stbd' : 'port'; sim.hdg = wrap360(w + (sim.tack === 'port' ? 42 : -42)); }
+function syncSimUI() {
+  $('#simOn').checked = S.sim;
+  $('#simCtl').style.opacity = S.sim ? '1' : '.45';
+  $('#simCtl').querySelectorAll('button,input').forEach(i => { i.disabled = !S.sim; });
+}
+$('#simOn').addEventListener('change', e => setSim(e.target.checked));
+$('#simSpd').addEventListener('input', e => { sim.spd = +e.target.value; $('#simSpdV').textContent = sim.spd.toFixed(1); });
+$('#simL').addEventListener('click', () => simSteer(-5));
+$('#simR').addEventListener('click', () => simSteer(5));
+$('#simTack').addEventListener('click', simTack);
+$('#simAuto').addEventListener('change', e => { sim.auto = e.target.checked; });
+$('#simLine').addEventListener('click', () => {
+  if (!st.origin) st.origin = { ...SIM_ORIGIN };
+  st.pin = { ...SIM_PIN, ...fromENU(SIM_PIN.x, SIM_PIN.y) }; st.rc = { ...SIM_RC, ...fromENU(SIM_RC.x, SIM_RC.y) };
+  logRow('sim_line'); render();
+});
+$('#simHome').addEventListener('click', () => { sim.x = 10; sim.y = -220; sim.tack = 'port'; sim.auto = true; $('#simAuto').checked = true; st.trail = []; });
+
+// ---------------- settings sheet ----------------
+const ON_OFF = [[true, 'On'], [false, 'Off']];
+const KIND_OPTS = Object.entries(KINDS);
+const SCHEMA = [
+  { k: 'dir', n: 1, t: 'Направление в гонке', c: 'HEAding / COG', o: [['hdg', 'Курс (компас)'], ['cog', 'COG (GPS)']], h: 'Курс — куда смотрит нос. COG — направление движения, работает от 0,5 уз.' },
+  { k: 'bar', n: 2, t: 'Бар-граф в гонке', c: 'HEEL / SHIFt', o: [['heel', 'Крен'], ['shift', 'Сдвиги ветра']], h: 'Крен: сегмент = 2,5°. Сдвиги: сегмент = 3°, стрелка вверху — опорный угол найден.' },
+  { k: 'timerMode', n: 3, t: 'Таймер после старта', c: 'rESEt / rolling / Count UP', o: [['reset', 'Reset'], ['rolling', 'Rolling'], ['countup', 'Count Up']] },
+  { k: 'damp', n: 4, t: 'Демпфирование компаса', c: 'd LEvEL', o: [[0, '0 — нет'], [1, '1 — слабое'], [2, '2 — сильное']], h: 'Гладкая вода — 0, ветер и волна — 1 или 2.' },
+  { k: 'hdgOffset', n: 5, t: 'Поправка курса', c: 'HEAding OFFSEt', r: [-90, 90, 1, '°'], h: 'Если телефон стоит не поперёк диаметральной плоскости.' },
+  { k: 'decl', n: 6, t: 'Магнитное склонение', c: 'dEcLinAtion', r: [-45, 45, 0.5, '°'], h: 'Плюс — восточное. Для истинных градусов оставьте 0. Автоопределения в браузере нет: возьмите значение с карты.' },
+  { k: 'dtl', n: 7, t: 'Дистанция до линии', c: 'diStAncE to LinE', o: ON_OFF, h: 'Off — в стартовом режиме внизу показывается скорость.' },
+  { k: 'bow', n: 8, t: 'Поправка на нос', c: 'b OFFSEt', r: [0, 12.5, 0.1, ' м'], h: 'Расстояние от телефона до носа.' },
+  { k: 'prec', n: 9, t: 'Точность дистанции', c: 'diStAncE PrEciSion', o: [[1, '0.0 м'], [0, '0 м']] },
+  { k: 'gps', n: 10, t: 'GPS', c: 'gPS', o: [[true, 'On'], [false, 'Off — тактический компас']], h: 'Без GPS PIN и RC задают опорные курсы левого и правого галса.' },
+  { k: 'bonus', n: 12, t: 'Bonus-экран', c: 'bonuS ScrEEn', o: ON_OFF, h: 'Открывается MODE + +1, закрывается любой кнопкой.' },
+  { k: 'bonusTop', n: 13, t: 'Bonus: верхняя строка', o: KIND_OPTS, show: () => S.bonus },
+  { k: 'bonusBot', n: 13, t: 'Bonus: нижняя строка', o: KIND_OPTS, show: () => S.bonus },
+  { k: 'bonusBar', n: 14, t: 'Bonus: бар-граф', o: [['heel', 'Крен'], ['shift', 'Сдвиг'], ['off', 'Выкл']], show: () => S.bonus },
+  { k: 'heelInvert', n: '+', t: 'Инвертировать крен', o: [[false, 'Нет'], [true, 'Да']], h: 'Если крен на правый борт показывается со знаком минус.' },
+  { k: 'sound', n: '+', t: 'Звук отсчёта', o: [[false, 'Выкл'], [true, 'Вкл']], h: 'Сигнал на каждой минуте, в последние 10 секунд и на старте.' },
+  { k: 'hard', n: 11, t: 'Полный сброс', c: 'Hard rESEt', hard: true }
+];
+let hardArmed = false;
+function buildSettings() {
+  const list = $('#setList'); list.innerHTML = '';
+  for (const it of SCHEMA) {
+    if (it.show && !it.show()) continue;
+    const row = document.createElement('div'); row.className = 'set';
+    row.innerHTML = `<div class="n">${it.n}</div><div class="t">${it.t}${it.c ? `<code>${it.c}</code>` : ''}</div><div class="ctl"></div>${it.h ? `<div class="hint">${it.h}</div>` : ''}`;
+    const ctl = row.querySelector('.ctl');
+    if (it.o) {
+      const seg = document.createElement('div'); seg.className = 'seg';
+      it.o.forEach(([v, lab]) => {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = lab; b.setAttribute('aria-pressed', String(S[it.k] === v));
+        b.addEventListener('click', () => { setSetting(it.k, v); buildSettings(); });
+        seg.appendChild(b);
+      });
+      ctl.appendChild(seg);
+    } else if (it.r) {
+      const [mn, mx, stp, unit] = it.r, dec = stp < 1 ? 1 : 0;
+      ctl.innerHTML = `<div class="stepper"><button type="button" aria-label="меньше">−</button><input type="range" id="set-${it.k}" min="${mn}" max="${mx}" step="${stp}" value="${S[it.k]}"><button type="button" aria-label="больше">+</button><output>${(+S[it.k]).toFixed(dec)}${unit}</output></div>`;
+      const inp = ctl.querySelector('input'), out = ctl.querySelector('output'), [bm, bp] = ctl.querySelectorAll('button');
+      const upd = v => { v = Math.min(mx, Math.max(mn, Math.round(v / stp) * stp)); v = +v.toFixed(dec); inp.value = v; out.textContent = v.toFixed(dec) + unit; setSetting(it.k, v); };
+      inp.addEventListener('input', () => upd(+inp.value));
+      bm.addEventListener('click', () => upd(S[it.k] - stp)); bp.addEventListener('click', () => upd(S[it.k] + stp));
+    } else if (it.hard) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn danger';
+      b.textContent = hardArmed ? 'Точно сбросить? Нажмите ещё раз' : 'Сбросить настройки, линию и рекорды';
+      b.addEventListener('click', () => {
+        if (!hardArmed) { hardArmed = true; buildSettings(); return; }
+        hardArmed = false; const sim = S.sim; S = { ...DEFAULTS, sim }; saveS(); resetMax();
+        st.pin = st.rc = null; saveLine(); st.heelZero = st.pitchZero = 0; st.refs = { port: null, stbd: null };
+        restartGPS(); buildSettings(); msg('rESEt'); render();
+      });
+      ctl.appendChild(b);
+    }
+    list.appendChild(row);
+  }
+}
+function setSetting(k, v) {
+  S[k] = v; saveS();
+  if (k === 'gps') { restartGPS(); st.fix = null; }
+  if (k === 'bar') { st.shift = { buf: [], trim: null, disp: 0 }; }
+  if (k === 'bonus' && !v && st.mode === 'bonus') st.mode = st.bonusFrom;
+  render();
+}
+
+// ---------------- log sheet ----------------
+async function buildLog() {
+  const list = $('#logList'); list.innerHTML = '<p class="note">Загрузка…</p>';
+  try { db = db || await openDB(); } catch (e) { list.innerHTML = '<p class="note">Браузер не даёт хранить журнал (приватное окно?).</p>'; return; }
+  await logFlush();
+  const sessions = (await idbReq(db.transaction('sessions').objectStore('sessions').getAll())).sort((a, b) => b.id - a.id);
+  if (!sessions.length) { list.innerHTML = '<p class="note">Пока пусто. Включите прибор — запись начнётся сама.</p>'; return; }
+  list.innerHTML = '';
+  for (const s of sessions) {
+    const mins = Math.max(0, Math.round((s.end - s.start) / 60000));
+    const d = new Date(s.start);
+    const item = document.createElement('div'); item.className = 'logitem';
+    item.innerHTML = `<div class="meta"><b>${d.toLocaleDateString('ru-RU')} ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}${s.sim ? ' · симулятор' : ''}${s.id === logSid ? ' · идёт запись' : ''}</b><span>${mins} мин · ${s.rows} записей</span></div>
+      <button class="btn" type="button" data-a="csv">CSV</button><button class="btn" type="button" data-a="gpx">GPX</button><button class="btn danger" type="button" data-a="del">Удалить</button>`;
+    item.querySelector('[data-a=csv]').addEventListener('click', () => exportLog(s.id, 'csv'));
+    item.querySelector('[data-a=gpx]').addEventListener('click', () => exportLog(s.id, 'gpx'));
+    const del = item.querySelector('[data-a=del]');
+    del.addEventListener('click', async () => {
+      if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = 'Точно удалить?'; return; }
+      const tx = db.transaction(['sessions', 'chunks'], 'readwrite');
+      tx.objectStore('sessions').delete(s.id);
+      const keys = await idbReq(tx.objectStore('chunks').index('sid').getAllKeys(s.id));
+      keys.forEach(k => tx.objectStore('chunks').delete(k));
+      tx.oncomplete = buildLog;
+    });
+    list.appendChild(item);
+  }
+}
+
+// ---------------- sheets ----------------
+function openSheet(id) {
+  if (id === 'shSettings') { hardArmed = false; buildSettings(); }
+  if (id === 'shLog') buildLog();
+  $('#' + id).hidden = false;
+}
+document.querySelectorAll('.sheet').forEach(sh => {
+  sh.addEventListener('click', e => { if (e.target === sh || e.target.closest('[data-close]')) sh.hidden = true; });
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.sheet').forEach(s => s.hidden = true); });
+$('#bSettings').addEventListener('click', () => openSheet('shSettings'));
+$('#bLog').addEventListener('click', () => openSheet('shLog'));
+$('#bHelp').addEventListener('click', () => openSheet('shHelp'));
+addEventListener('resize', () => render());
+
+// ---------------- boot ----------------
+if (S.sim) st.origin = { ...SIM_ORIGIN };
+syncSimUI();
+render();
+})();
+</script>
+</body>
+</html>
