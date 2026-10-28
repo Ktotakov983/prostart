@@ -638,6 +638,24 @@ body.light-theme{
 }
 .route-map .leaflet-tile-pane{ filter:saturate(.7) brightness(.9); }
 
+.update-banner{
+  position:fixed;
+  left:50%;
+  top:max(8px, env(safe-area-inset-top));
+  transform:translateX(-50%);
+  z-index:40;
+  background:var(--accent);
+  color:#fff;
+  border:none;
+  border-radius:16px;
+  padding:6px 14px;
+  font-family:inherit;
+  font-size:12px;
+  font-weight:bold;
+  cursor:pointer;
+  box-shadow:0 4px 14px rgba(0,0,0,.4);
+}
+
 .menu-version{
   padding:16px 4px 4px;
   text-align:center;
@@ -918,6 +936,36 @@ body.light-theme{
       </details>
 
       <details class="menu-section">
+        <summary>Измерение скорости</summary>
+        <div class="menu-row">
+          <label>Фаза несущей (только StartGun 2, если телефон её отдаёт)</label>
+          <select id="useCarrierPhaseSelect">
+            <option value="on">Использовать</option>
+            <option value="off">Не использовать</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>Акселерометр (эксперимент, только StartGun 2)</label>
+          <select id="useAccelSelect">
+            <option value="off">Не использовать</option>
+            <option value="on">Использовать</option>
+          </select>
+        </div>
+        <div class="menu-row menu-readout">
+          Скорость считается фильтром из координат и доплеровской скорости приёмника,
+          курс над грунтом — с учётом курса от приёмника.
+          <br><br>
+          <b>Фаза несущей</b> уточняет скорость примерно до ±0,05 м/с, но работает
+          только на телефонах, которые отдают сырые измерения фазы, и на ходу
+          быстрее 1 уз. Есть ли она у вашего телефона — в «GPS диагностика».
+          <br><br>
+          <b>Акселерометр</b> ускоряет реакцию на порыв на 1–2 секунды, но на волне
+          и при плохой калибровке датчиков может добавить качание скорости.
+          Включайте и сравнивайте.
+        </div>
+      </details>
+
+      <details class="menu-section">
         <summary>Курс (Heading)</summary>
         <div class="menu-row">
           <label>Источник курса</label>
@@ -1092,6 +1140,9 @@ body.light-theme{
       </details>
 
       <div class="menu-version" id="appVersion"></div>
+      <div class="menu-row hidden" id="checkUpdateRow">
+        <button id="checkUpdateBtn" class="menu-action">Проверить обновление приложения</button>
+      </div>
 
     </div>
   </div>
@@ -1144,6 +1195,7 @@ body.light-theme{
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<button id="updateBanner" class="update-banner hidden"></button>
 
 <div id="lockOverlay" class="lock-overlay hidden"></div>
 <button id="lockBtn" class="lock-btn" aria-label="Заблокировать экран" title="Заблокировать экран (от капель воды)">
@@ -1156,7 +1208,7 @@ body.light-theme{
 
 // Bump on every published change, so it is obvious on the phone whether the
 // new version has arrived or the old one is still cached.
-const WEB_VERSION = '2.4';
+const WEB_VERSION = '2.5';
 const WEB_VERSION_DATE = '28.10.2026';
 
 const EARTH_R = 6371000;
@@ -1245,11 +1297,15 @@ const state = {
   screenLocked: false,
   lightTheme: false,
   autoOffsetSaved: null,
+  useCarrierPhase: true,
+  useAccel: false,
 };
 
 const $ = id => document.getElementById(id);
 const el = {
   gpsDot: $('gpsIcon'), gpsLabel: $('gpsLabel'), compassLabel: $('compassLabel'), appVersion: $('appVersion'),
+  checkUpdateRow: $('checkUpdateRow'), checkUpdateBtn: $('checkUpdateBtn'), updateBanner: $('updateBanner'),
+  useCarrierPhaseSelect: $('useCarrierPhaseSelect'), useAccelSelect: $('useAccelSelect'),
   menuBtn: $('menuBtn'), menuOverlay: $('menuOverlay'), menuClose: $('menuClose'),
   screenStart: $('screenStart'), screenRace: $('screenRace'),
   lineInfo: $('lineInfo'), timerDisplay: $('timerDisplay'),
@@ -1300,6 +1356,7 @@ const PERSISTED_FIELDS = [
   'presetSeconds', 'timerMode', 'windDir', 'tack', 'bowOffsetM', 'headingSource',
   'headingOffsetDeg', 'compassTauS', 'raceBarGraphMode', 'speedUnit', 'distUnit',
   'distPrecision', 'heelZeroOffset', 'pin', 'boat', 'lightTheme', 'autoOffsetSaved',
+  'useCarrierPhase', 'useAccel',
 ];
 function saveSettings() {
   const out = {};
@@ -1325,6 +1382,8 @@ function applySettingsToUi() {
   el.distUnitSelect.value = state.distUnit;
   el.distPrecisionSelect.value = state.distPrecision;
   document.body.classList.toggle('light-theme', !!state.lightTheme);
+  el.useCarrierPhaseSelect.value = state.useCarrierPhase ? 'on' : 'off';
+  el.useAccelSelect.value = state.useAccel ? 'on' : 'off';
 }
 
 const SESSIONS_INDEX_KEY = 'prostart_sessions_index_v1';
@@ -1569,9 +1628,12 @@ function pollNativeGps() {
   state.replaying = fixes.length > 1;
   for (const f of fixes) {
     onPosition({
-      coords: { latitude: f.lat, longitude: f.lon, accuracy: f.acc, speed: f.spd },
+      coords: { latitude: f.lat, longitude: f.lon, accuracy: f.acc, speed: f.spd, heading: f.brg },
       timestamp: f.t,
       speedAccuracy: f.sacc,
+      bearingAccuracy: f.bacc,
+      accel: f.ae != null ? { e: f.ae, n: f.an } : null,
+      carrierPhase: f.cp || null,
       sats: f.su >= 0 ? { used: f.su, visible: f.sv } : null,
     });
   }
@@ -1590,6 +1652,16 @@ function noteFixRate(t) {
   while (fixTimes.length && fixTimes[0] < t - 10000) fixTimes.shift();
   if (fixTimes.length < 2) return null;
   return (fixTimes.length - 1) / ((fixTimes[fixTimes.length - 1] - fixTimes[0]) / 1000);
+}
+
+function carrierPhaseDiag(pos) {
+  const st = nativeGps && nativeGps.status;
+  if (!st || st.adrSats == null || st.adrSats < 0) return 'телефон не отдаёт сырые измерения';
+  if (st.adrSats === 0) return 'телефон не отдаёт фазу (0 спутников)';
+  if (!state.useCarrierPhase) return `${st.adrSats} сп. с фазой, выключено в меню`;
+  return pos.carrierPhase
+    ? `используется: ${pos.carrierPhase.sats} сп., ±${pos.carrierPhase.sig.toFixed(2)} м/с`
+    : `${st.adrSats} сп. с фазой, ждёт ≥6 сп. и скорости > 1 уз`;
 }
 
 function gpsStatusLabel(accuracy, hz, sats) {
@@ -1656,7 +1728,9 @@ function onGeoError(err) {
 // bounded random acceleration (KF_ACCEL_SIGMA), so the estimate can only change
 // as fast as a boat can accelerate. Fixes and speeds far outside the predicted
 // uncertainty are rejected as glitches.
-const KF_ACCEL_SIGMA = 0.1;       // m/s², 1σ acceleration of a dinghy/keelboat in gusts
+const KF_ACCEL_SIGMA = 0.1;       // m/s², 1σ along-track acceleration (speeding up / slowing down)
+const KF_TURN_ACCEL_SIGMA = 0.8;  // m/s², 1σ across-track acceleration (turning)
+const KF_TURN_MIN_SPEED_MS = 0.5; // below this there's no track to turn from
 const KF_MAX_ACCEL = 0.5;         // m/s², hard limit: 0 → 5 kn takes at least ~5 s
 const KF_DOPPLER_SIGMA = 0.6;     // m/s, 1σ of the phone's Doppler speed
 const KF_DOPPLER_GATE = 3;        // Doppler readings further than this many σ off are glitches
@@ -1670,7 +1744,11 @@ const KF_ZUPT_SIGMA = 0.05;       // m/s, how hard a detected standstill pins th
 const KF_STILL_WINDOW_MS = 20000;
 const KF_STILL_MAX_SHIFT_M = 1.2;
 
-const gpsKf = { ref: null, f: null, rejects: 0, dopplerRejects: 0, rejectedTotal: 0 };
+const KF_COG_MIN_SPEED_MS = 1.0;  // 2 kn: below it the receiver's course isn't used
+const KF_COG_DEFAULT_SIGMA_DEG = 10;
+const KF_CP_MIN_SIGMA = 0.05;     // m/s, floor for the carrier-phase velocity error
+
+const gpsKf = { ref: null, f: null, rejects: 0, dopplerRejects: 0, rejectedTotal: 0, cpUsed: 0 };
 
 function kfNew(x, y, t, posVar) {
   return {
@@ -1680,17 +1758,44 @@ function kfNew(x, y, t, posVar) {
   };
 }
 
-function kfPredict(f, dt) {
+// acc: optional measured horizontal acceleration {e, n} in m/s², used as a
+// control input so the speed reacts to a gust before GPS confirms it.
+function kfPredict(f, dt, acc) {
   const X = f.X, P = f.P;
   X[0] += X[2] * dt;
   X[1] += X[3] * dt;
+  if (acc) {
+    X[0] += 0.5 * acc.e * dt * dt;
+    X[1] += 0.5 * acc.n * dt * dt;
+    X[2] += acc.e * dt;
+    X[3] += acc.n * dt;
+  }
   // P = F·P·Fᵀ + Q, F = [[1,0,dt,0],[0,1,0,dt],[0,0,1,0],[0,0,0,1]]
   const FP = P.map((row, i) => (i < 2 ? row.map((v, j) => v + dt * P[i + 2][j]) : row.slice()));
   const N = FP.map(row => [row[0] + dt * row[2], row[1] + dt * row[3], row[2], row[3]]);
-  const q = KF_ACCEL_SIGMA * KF_ACCEL_SIGMA, dt2 = dt * dt;
-  const q11 = q * dt2 * dt2 / 4, q12 = q * dt2 * dt / 2, q22 = q * dt2;
-  N[0][0] += q11; N[0][2] += q12; N[2][0] += q12; N[2][2] += q22;
-  N[1][1] += q11; N[1][3] += q12; N[3][1] += q12; N[3][3] += q22;
+  // Random acceleration with covariance Σ (2×2, east/north). A boat changes
+  // speed slowly but turns fast: a tack swings the velocity vector at ~1 m/s².
+  // So Σ is small along the track and large across it; when (nearly) stopped
+  // there is no track and it is the small value in all directions.
+  const s = Math.hypot(X[2], X[3]);
+  const qa = KF_ACCEL_SIGMA * KF_ACCEL_SIGMA;
+  let See = qa, Snn = qa, Sen = 0;
+  if (s > KF_TURN_MIN_SPEED_MS) {
+    const ue = X[2] / s, un = X[3] / s, qc = KF_TURN_ACCEL_SIGMA * KF_TURN_ACCEL_SIGMA;
+    See = qa * ue * ue + qc * un * un;
+    Snn = qa * un * un + qc * ue * ue;
+    Sen = (qa - qc) * ue * un;
+  }
+  const dt2 = dt * dt, kPP = dt2 * dt2 / 4, kPV = dt2 * dt / 2, kVV = dt2;
+  const S = [[See, Sen], [Sen, Snn]];
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 2; j++) {
+      N[i][j] += kPP * S[i][j];
+      N[i][j + 2] += kPV * S[i][j];
+      N[i + 2][j] += kPV * S[i][j];
+      N[i + 2][j + 2] += kVV * S[i][j];
+    }
+  }
   f.P = N;
 }
 
@@ -1714,9 +1819,36 @@ function kfOutput(f) {
   return { lat: ll.lat, lon: ll.lon, speedMs, cogDeg: speedMs > 0.2 ? bearingXY(f.X[2], f.X[3]) : null };
 }
 
+// Same as kfInnovation, but for a measurement whose innovation the caller has
+// already computed (angles, where z − H·X would need wrapping).
+function kfInnovationFor(f, H, y, R) {
+  const PHt = f.P.map(row => row[0] * H[0] + row[1] * H[1] + row[2] * H[2] + row[3] * H[3]);
+  const S = H[0] * PHt[0] + H[1] * PHt[1] + H[2] * PHt[2] + H[3] * PHt[3] + R;
+  return { y, S, PHt };
+}
+
+// Accelerometer as filter input (optional, setting "useAccel"). The phone's
+// horizontal acceleration has a bias from tilt errors of the orientation
+// sensor (1° of error = 0.17 m/s²); a boat's acceleration averages to zero over
+// a minute, so that average is the bias and is subtracted.
+const ACCEL_BIAS_TAU_S = 60;
+const ACCEL_MIN_SAMPLES = 30;
+const accelBias = { e: 0, n: 0, samples: 0 };
+function accelInput(extra, dt) {
+  if (extra.ae == null || extra.an == null) return null;
+  const a = Math.min(1, dt / ACCEL_BIAS_TAU_S);
+  accelBias.e += a * (extra.ae - accelBias.e);
+  accelBias.n += a * (extra.an - accelBias.n);
+  accelBias.samples++;
+  if (!state.useAccel || accelBias.samples < ACCEL_MIN_SAMPLES) return null;
+  return { e: extra.ae - accelBias.e, n: extra.an - accelBias.n };
+}
+
 // Feeds one fix; returns the filtered {lat, lon, speedMs, cogDeg}, or null when
-// the fix was rejected as a glitch.
-function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma) {
+// the fix was rejected as a glitch. extra (all optional): bearing / bearingAcc
+// (receiver's course over ground, deg), ae / an (mean acceleration east/north
+// since the previous fix, m/s²), cp ({e, n, sig, sats}: carrier-phase velocity).
+function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma, extra = {}) {
   if (!gpsKf.ref) gpsKf.ref = { lat, lon };
   const p = project(lat, lon, gpsKf.ref.lat, gpsKf.ref.lon);
   const posSigma = Math.max(KF_MIN_POS_SIGMA, (accuracy || 10) / 1.5);
@@ -1732,16 +1864,18 @@ function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma) {
   const dt = (t - f.t) / 1000;
   if (dt <= 0) return kfOutput(f);
   const vBefore = [f.X[2], f.X[3]];
-  kfPredict(f, dt);
+  kfPredict(f, dt, accelInput(extra, dt));
   f.t = t;
-  // However the measurements pull, the velocity can't change faster than a
-  // boat accelerates or brakes.
+  // However the measurements pull, the speed can't change faster than a boat
+  // accelerates or brakes. Only the magnitude is limited: the direction is
+  // free, a tack turns the velocity vector much faster than 0.5 m/s².
   const limitAccel = () => {
-    const dvx = f.X[2] - vBefore[0], dvy = f.X[3] - vBefore[1], dv = Math.hypot(dvx, dvy);
-    const maxDv = KF_MAX_ACCEL * dt;
-    if (dv > maxDv) {
-      f.X[2] = vBefore[0] + dvx * maxDv / dv;
-      f.X[3] = vBefore[1] + dvy * maxDv / dv;
+    const sBefore = Math.hypot(vBefore[0], vBefore[1]), s = Math.hypot(f.X[2], f.X[3]);
+    const maxDs = KF_MAX_ACCEL * dt;
+    if (Math.abs(s - sBefore) > maxDs && s > 0) {
+      const k = Math.max(0, sBefore + Math.sign(s - sBefore) * maxDs) / s;
+      f.X[2] *= k;
+      f.X[3] *= k;
     }
   };
 
@@ -1801,6 +1935,38 @@ function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma) {
       }
     }
   }
+
+  // Receiver's course over ground: it comes from the same Doppler solution as
+  // the speed and turns with the boat at once, while a course derived from
+  // positions lags by seconds. Only trusted above ~2 kn, below that the
+  // direction of a small velocity is noise.
+  const sNow = Math.hypot(f.X[2], f.X[3]);
+  if (extra.bearing != null && dopplerMs != null && dopplerMs > KF_COG_MIN_SPEED_MS && sNow > KF_COG_MIN_SPEED_MS) {
+    const sigma = toRad(clamp(extra.bearingAcc != null ? extra.bearingAcc : KF_COG_DEFAULT_SIGMA_DEG, 2, 30));
+    const y = toRad(normalizeSigned(extra.bearing - bearingXY(f.X[2], f.X[3])));
+    const s2 = sNow * sNow;
+    // heading = atan2(vx, vy): ∂/∂vx = vy/s², ∂/∂vy = −vx/s²
+    const inn = kfInnovationFor(f, [0, 0, f.X[3] / s2, -f.X[2] / s2], y, sigma * sigma);
+    if (Math.abs(inn.y) <= KF_DOPPLER_GATE * Math.sqrt(inn.S)) kfApply(f, inn);
+    else gpsKf.rejectedTotal++;
+  }
+
+  // Carrier-phase velocity (StartGun 2, phones that report carrier phase):
+  // ~0.03-0.1 m/s, far better than anything else here, so it dominates.
+  if (extra.cp && state.useCarrierPhase) {
+    const cp = extra.cp, v = Math.max(KF_CP_MIN_SIGMA, cp.sig) ** 2;
+    const ie = kfInnovation(f, [0, 0, 1, 0], cp.e, v);
+    const inn = kfInnovation(f, [0, 0, 0, 1], cp.n, v);
+    const gate = KF_DOPPLER_GATE * KF_DOPPLER_GATE * 2;
+    if (ie.y * ie.y / ie.S + inn.y * inn.y / inn.S <= gate) {
+      kfApply(f, ie);
+      kfApply(f, kfInnovation(f, [0, 0, 0, 1], cp.n, v));
+      gpsKf.cpUsed++;
+    } else {
+      gpsKf.rejectedTotal++;
+    }
+  }
+
   limitAccel();
   return kfOutput(f);
 }
@@ -1826,7 +1992,7 @@ const GPS_MAX_ACCEPTABLE_ACCURACY_M = 60;
 const GPS_MIN_SPEED_FOR_HEADING_MS = 0.35;
 
 function onPosition(pos) {
-  const { latitude: lat, longitude: lon, speed, accuracy } = pos.coords;
+  const { latitude: lat, longitude: lon, speed, heading, accuracy } = pos.coords;
   const t = pos.timestamp || Date.now();
   state.lastAccuracy = accuracy;
 
@@ -1846,7 +2012,13 @@ function onPosition(pos) {
   el.gpsLabel.textContent = gpsStatusLabel(accuracy, fixHz, pos.sats);
 
   const rawSpeedMs = (speed != null && !isNaN(speed)) ? speed : null;
-  const filt = gpsFilterUpdate(lat, lon, accuracy, rawSpeedMs, t, pos.speedAccuracy);
+  const filt = gpsFilterUpdate(lat, lon, accuracy, rawSpeedMs, t, pos.speedAccuracy, {
+    bearing: heading != null && !isNaN(heading) ? heading : null,
+    bearingAcc: pos.bearingAccuracy != null ? pos.bearingAccuracy : null,
+    ae: pos.accel ? pos.accel.e : null,
+    an: pos.accel ? pos.accel.n : null,
+    cp: pos.carrierPhase || null,
+  });
   if (!filt) {
     el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м · выброс`;
     return;
@@ -1881,6 +2053,9 @@ function onPosition(pos) {
     (nativeGps && nativeGps.status ? `Полное отслеживание GNSS: ${nativeGps.status.fullTracking ? 'да' : 'нет (Android < 12)'}\n` : '') +
     `Частота: ${fixHz != null ? fixHz.toFixed(2) + ' Гц' : '—'}${pos.sats ? ` · спутники ${pos.sats.used} в решении / ${pos.sats.visible} видно` : ''}\n` +
     `Скорость: ${speedMs.toFixed(2)} м/с (сырая GPS: ${rawSpeedMs != null ? rawSpeedMs.toFixed(2) : 'нет'})\n` +
+    `Курс от приёмника: ${heading != null && !isNaN(heading) ? Math.round(heading) + '°' + (pos.bearingAccuracy != null ? ` ±${Math.round(pos.bearingAccuracy)}°` : '') : 'нет'}\n` +
+    (nativeGps ? `Фаза несущей: ${carrierPhaseDiag(pos)}\n` : '') +
+    (nativeGps ? `Акселерометр: ${!pos.accel ? 'нет данных' : state.useAccel ? (accelBias.samples < ACCEL_MIN_SAMPLES ? 'калибруется' : 'используется') : 'выключен в меню'}\n` : '') +
     `Отброшено выбросов: ${gpsKf.rejectedTotal}\n` +
     `Курс: ${state.lastHeading != null ? state.lastHeading.toFixed(0) + '°' : '--'}` +
     (state.headingSource === 'auto'
@@ -3477,7 +3652,43 @@ function renderVersion() {
     app = 'приложение StartGun 1';
   }
   el.appVersion.innerHTML = `ProStart Web ${WEB_VERSION} от ${WEB_VERSION_DATE}<br>${escapeHtml(app)}`;
+  const canUpdate = !!(window.StartGunApp && window.StartGunApp.checkUpdate);
+  el.checkUpdateRow.classList.toggle('hidden', !canUpdate);
 }
+
+// Web auto-update: the page itself is fetched fresh now and then; when the
+// published WEB_VERSION differs, a banner offers to reload. Never reloads by
+// itself - not in the middle of a countdown.
+const WEB_UPDATE_FIRST_CHECK_MS = 10 * 1000;
+const WEB_UPDATE_CHECK_EVERY_MS = 30 * 60 * 1000;
+async function checkWebUpdate() {
+  if (navigator.onLine === false) return;
+  try {
+    const res = await fetch(location.pathname + '?nocache=' + Date.now(), { cache: 'no-store' });
+    const m = (await res.text()).match(/WEB_VERSION = '([^']+)'/);
+    if (m && m[1] !== WEB_VERSION) {
+      el.updateBanner.textContent = `Доступна версия ${m[1]} — обновить`;
+      el.updateBanner.dataset.version = m[1];
+      el.updateBanner.classList.remove('hidden');
+    }
+  } catch (err) {}
+}
+el.updateBanner.addEventListener('click', () => {
+  // A new query string bypasses the HTTP cache (GitHub Pages caches for 10 min).
+  location.replace(location.pathname + '?v=' + encodeURIComponent(el.updateBanner.dataset.version || Date.now()));
+});
+el.checkUpdateBtn.addEventListener('click', () => {
+  try { window.StartGunApp.checkUpdate(); } catch (err) {}
+  checkWebUpdate();
+});
+el.useCarrierPhaseSelect.addEventListener('change', () => {
+  state.useCarrierPhase = el.useCarrierPhaseSelect.value === 'on';
+  saveSettings();
+});
+el.useAccelSelect.addEventListener('change', () => {
+  state.useAccel = el.useAccelSelect.value === 'on';
+  saveSettings();
+});
 
 loadSettings();
 applySettingsToUi();
@@ -3489,6 +3700,8 @@ renderPreset();
 syncPageFromHash();
 initGeo();
 if (window.StartGunCompass) startNativeCompass();
+setTimeout(checkWebUpdate, WEB_UPDATE_FIRST_CHECK_MS);
+setInterval(checkWebUpdate, WEB_UPDATE_CHECK_EVERY_MS);
 if (state.headingSource !== 'gps') {
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     document.addEventListener('click', () => enableOrientationSensor(), { once: true });
