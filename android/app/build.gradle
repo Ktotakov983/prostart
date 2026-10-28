@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.ktotakov983.startgun'
+    compileSdk 34
+
+    defaultConfig {
+        // Different id from the first StartGun, so both can be installed side by
+        // side and the old app's history isn't lost before it is exported.
+        applicationId 'io.github.ktotakov983.startgun2'
+        minSdk 24
+        targetSdk 34
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger() + 1)
+        versionName '2.0'
+    }
+
+    signingConfigs {
+        release {
+            // Created once by the CI workflow and kept in the repo, so every new
+            // build installs as an update over the previous one.
+            storeFile rootProject.file('keystore/startgun.keystore')
+            storePassword 'startgun'
+            keyAlias 'startgun'
+            keyPassword 'startgun'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
