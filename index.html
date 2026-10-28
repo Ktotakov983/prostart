@@ -2175,14 +2175,44 @@ function computeSessionStats(view) {
 
 let historyChartLayout = null;
 let historyChartSelIndex = null;
+const CHART_SMOOTH_WINDOW_MS = 15000;
+const CHART_GAP_MS = 10000;
+
+// Running median: removes single-point spikes and 0-dropouts before averaging,
+// which a plain average would only smear into bumps.
+function medianFilter(values, size) {
+  const half = Math.floor(size / 2);
+  return values.map((_, i) => {
+    const win = values.slice(Math.max(0, i - half), i + half + 1).sort((a, b) => a - b);
+    return win[Math.floor(win.length / 2)];
+  });
+}
+
+// Centred moving average over a time window (not a point count), so it works
+// the same for 1 s and 2 s logging. Two-pointer sweep: O(n).
+function smoothByTime(points, values, windowMs) {
+  const half = windowMs / 2, out = new Array(values.length);
+  let lo = 0, hi = 0, sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const t = points[i].t;
+    while (hi < points.length && points[hi].t <= t + half) { sum += values[hi]; hi++; }
+    while (points[lo].t < t - half) { sum -= values[lo]; lo++; }
+    out[i] = sum / (hi - lo);
+  }
+  return out;
+}
 
 function drawHistoryChart() {
   const canvas = el.historyDetailChart;
   const ctx = canvas.getContext('2d');
   const w = canvas.clientWidth || canvas.width;
   const h = canvas.clientHeight || canvas.height;
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
+  // Draw at device resolution: on a phone (pixel ratio 2-3) a CSS-pixel canvas
+  // is upscaled and the line looks blurry and stair-stepped.
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  if (canvas.width !== Math.round(w * dpr)) canvas.width = Math.round(w * dpr);
+  if (canvas.height !== Math.round(h * dpr)) canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   ctx.clearRect(0, 0, w, h);
 
@@ -2195,8 +2225,12 @@ function drawHistoryChart() {
     return;
   }
 
-  const speeds = points.map(p => speedFromMs(p.speedMs));
-  const maxSpeed = Math.max(1, ...speeds);
+  const rawSpeeds = points.map(p => speedFromMs(p.speedMs));
+  // Phone GPS speed jumps ±0.5 kn from second to second and drops to 0 now and
+  // then, so the main line is a centred 10-second moving average; the raw
+  // samples stay underneath as a faint line.
+  const speeds = smoothByTime(points, medianFilter(rawSpeeds, 5), CHART_SMOOTH_WINDOW_MS);
+  const maxSpeed = Math.max(1, ...speeds) * 1.1;
   const t0 = points[0].t;
   const tSpan = Math.max(1000, points[points.length - 1].t - t0);
 
@@ -2224,15 +2258,27 @@ function drawHistoryChart() {
   ctx.fillText(startLabel, padL, h - 3);
   ctx.fillText(endLabel, w - padR - ctx.measureText(endLabel).width, h - 3);
 
-  ctx.strokeStyle = '#f2f2ee';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = padL + (plotW * (p.t - t0)) / tSpan;
-    const y = padT + plotH - (plotH * speeds[i]) / maxSpeed;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  // A gap in the GPS signal breaks the line instead of being bridged by a
+  // straight segment.
+  const plotLine = (values, style, width) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padL, padT, plotW, plotH);
+    ctx.clip();
+    ctx.strokeStyle = style;
+    ctx.lineWidth = width;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const x = padL + (plotW * (p.t - t0)) / tSpan;
+      const y = padT + plotH - (plotH * values[i]) / maxSpeed;
+      if (i === 0 || p.t - points[i - 1].t > CHART_GAP_MS) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  };
+  plotLine(rawSpeeds, 'rgba(242,242,238,.18)', 1);
+  plotLine(speeds, '#f2f2ee', 1.8);
 
   const startIdx = findStartIndexIn(historyView);
   if (startIdx >= 0) {
