@@ -30,6 +30,7 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private CompassSensor compass;
+    private Updater updater;
     private volatile boolean volumeKeysEnabled = false;
     private boolean permissionsAsked = false;
 
@@ -61,6 +62,8 @@ public class MainActivity extends Activity {
         web.loadUrl(APP_URL);
 
         requestNeededPermissions();
+        updater = new Updater(this);
+        updater.check(false);
     }
 
     // The compass is only needed while the screen shows it; GPS keeps running
@@ -126,11 +129,12 @@ public class MainActivity extends Activity {
     private class AppBridge {
         @JavascriptInterface
         public String version() {
-            try {
-                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-            } catch (PackageManager.NameNotFoundException e) {
-                return "?";
-            }
+            return updater.currentVersion();
+        }
+
+        @JavascriptInterface
+        public void checkUpdate() {
+            runOnUiThread(() -> updater.check(true));
         }
     }
 
