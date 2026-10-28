@@ -85,6 +85,11 @@ body.light-theme{
   filter:drop-shadow(0 0 4px rgba(47,158,90,.7));
 }
 
+.compass-label.warn{
+  color:var(--lcd-red);
+  font-weight:bold;
+}
+
 .topbar-actions{
   display:flex;
   gap:8px;
@@ -750,6 +755,7 @@ body.light-theme{
     <div class="status">
       <svg class="icon-glyph icon-gps-status" id="gpsIcon"><use href="#icon-gps"/></svg>
       <span id="gpsLabel">GPS...</span>
+      <span id="compassLabel" class="compass-label"></span>
     </div>
     <div class="topbar-actions">
       <button id="btnMode" class="icon-btn" aria-label="Переключить режим" title="Переключить START/RACE">⇄</button>
@@ -1221,11 +1227,12 @@ const state = {
   sessionCreatedAt: null,
   screenLocked: false,
   lightTheme: false,
+  autoOffsetSaved: null,
 };
 
 const $ = id => document.getElementById(id);
 const el = {
-  gpsDot: $('gpsIcon'), gpsLabel: $('gpsLabel'),
+  gpsDot: $('gpsIcon'), gpsLabel: $('gpsLabel'), compassLabel: $('compassLabel'),
   menuBtn: $('menuBtn'), menuOverlay: $('menuOverlay'), menuClose: $('menuClose'),
   screenStart: $('screenStart'), screenRace: $('screenRace'),
   lineInfo: $('lineInfo'), timerDisplay: $('timerDisplay'),
@@ -1275,7 +1282,7 @@ const SETTINGS_KEY = 'prostart_settings_v1';
 const PERSISTED_FIELDS = [
   'presetSeconds', 'timerMode', 'windDir', 'tack', 'bowOffsetM', 'headingSource',
   'headingOffsetDeg', 'compassTauS', 'raceBarGraphMode', 'speedUnit', 'distUnit',
-  'distPrecision', 'heelZeroOffset', 'pin', 'boat', 'lightTheme',
+  'distPrecision', 'heelZeroOffset', 'pin', 'boat', 'lightTheme', 'autoOffsetSaved',
 ];
 function saveSettings() {
   const out = {};
@@ -1641,8 +1648,12 @@ const KF_RESET_GAP_S = 30;        // longer signal gap → start the filter afre
 const KF_GATE_SIGMA = 5;          // reject a measurement this many σ off the prediction
 const KF_GATE_MIN_JUMP_M = 10;    // ...but never reject position jumps smaller than this
 const KF_MAX_REJECTS = 3;         // that many rejects in a row → trust GPS, reset
+const KF_LOW_SPEED_MS = 0.3;      // Doppler below this (0.6 kn) counts as "stopped"
+const KF_ZUPT_SIGMA = 0.05;       // m/s, how hard a detected standstill pins the speed to 0
+const KF_STILL_WINDOW_MS = 20000;
+const KF_STILL_MAX_SHIFT_M = 1.2;
 
-const gpsKf = { ref: null, f: null, rejects: 0, rejectedTotal: 0 };
+const gpsKf = { ref: null, f: null, rejects: 0, dopplerRejects: 0, rejectedTotal: 0 };
 
 function kfNew(x, y, t, posVar) {
   return {
@@ -1734,20 +1745,64 @@ function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma) {
   kfApply(f, ix);
   kfApply(f, kfInnovation(f, [0, 1, 0, 0], p.y, posVar));
 
-  // Doppler speed: measures |v|, linearised around the current velocity. Below
-  // ~0.3 m/s the direction is undefined, there the positions carry it.
+  // Stillness: if the raw positions of the last 20 s haven't moved on average,
+  // the boat is standing still whatever the noise says → zero-velocity update.
+  if (noteStillness(p.x, p.y, t)) {
+    const zv = KF_ZUPT_SIGMA * KF_ZUPT_SIGMA;
+    kfApply(f, kfInnovation(f, [0, 0, 1, 0], 0, zv));
+    kfApply(f, kfInnovation(f, [0, 0, 0, 1], 0, zv));
+  }
+
   if (dopplerMs != null) {
-    const s = Math.hypot(f.X[2], f.X[3]);
-    if (s > 0.3) {
-      // The native app reports the receiver's own speed accuracy; the browser doesn't.
-      const sigma = dopplerSigma != null ? clamp(dopplerSigma, 0.2, 1.5) : KF_DOPPLER_SIGMA;
-      const inn = kfInnovation(f, [0, 0, f.X[2] / s, f.X[3] / s], dopplerMs, sigma * sigma);
-      if (Math.abs(inn.y) <= KF_DOPPLER_GATE * Math.sqrt(inn.S)) kfApply(f, inn);
-      else gpsKf.rejectedTotal++;
+    // The native app reports the receiver's own speed accuracy; the browser doesn't.
+    const sigma = dopplerSigma != null ? clamp(dopplerSigma, 0.2, 1.5) : KF_DOPPLER_SIGMA;
+    if (dopplerMs < KF_LOW_SPEED_MS) {
+      // A low Doppler speed means (nearly) stopped: pull both velocity
+      // components towards zero. Works even when the direction is undefined,
+      // which the |v| update below can't do.
+      const zs = Math.max(sigma, dopplerMs);
+      kfApply(f, kfInnovation(f, [0, 0, 1, 0], 0, zs * zs));
+      kfApply(f, kfInnovation(f, [0, 0, 0, 1], 0, zs * zs));
+      gpsKf.dopplerRejects = 0;
+    } else {
+      // Measures |v|, linearised around the current velocity; below ~0.3 m/s
+      // the direction is undefined and the positions carry it.
+      const s = Math.hypot(f.X[2], f.X[3]);
+      if (s > 0.3) {
+        const inn = kfInnovation(f, [0, 0, f.X[2] / s, f.X[3] / s], dopplerMs, sigma * sigma);
+        // Only upward spikes are glitches. A reading *slower* than predicted is
+        // never thrown away: that is exactly how a filter that has drifted
+        // onto a fake speed gets corrected. And if the receiver insists three
+        // times in a row, it is right and the prediction is wrong.
+        const spike = inn.y > KF_DOPPLER_GATE * Math.sqrt(inn.S);
+        if (!spike || ++gpsKf.dopplerRejects >= KF_MAX_REJECTS) {
+          kfApply(f, inn);
+          gpsKf.dopplerRejects = 0;
+        } else {
+          gpsKf.rejectedTotal++;
+        }
+      }
     }
   }
   limitAccel();
   return kfOutput(f);
+}
+
+// Keeps the raw positions of the last KF_STILL_WINDOW_MS and reports whether
+// the mean of the older half and of the newer half coincide: moving even at
+// 0.5 kn shifts them by ~2.5 m, standing still they stay within ~1 m.
+const stillBuf = [];
+function noteStillness(x, y, t) {
+  stillBuf.push({ x, y, t });
+  while (stillBuf.length && stillBuf[0].t < t - KF_STILL_WINDOW_MS) stillBuf.shift();
+  if (stillBuf.length < 12 || t - stillBuf[0].t < KF_STILL_WINDOW_MS * 0.8) return false;
+  const mid = stillBuf[0].t + (t - stillBuf[0].t) / 2;
+  let ax = 0, ay = 0, an = 0, bx = 0, by = 0, bn = 0;
+  for (const q of stillBuf) {
+    if (q.t < mid) { ax += q.x; ay += q.y; an++; } else { bx += q.x; by += q.y; bn++; }
+  }
+  if (!an || !bn) return false;
+  return Math.hypot(bx / bn - ax / an, by / bn - ay / an) < KF_STILL_MAX_SHIFT_M;
 }
 
 const GPS_MAX_ACCEPTABLE_ACCURACY_M = 60;
@@ -2075,9 +2130,22 @@ const AUTO_OFFSET_TAU_S = 15;       // how slowly the learned offset adapts
 const AUTO_GPS_COURSE_MAX_AGE_MS = 5000;
 const AUTO_COMPASS_MAX_AGE_MS = 2000;
 
-let autoOffX = 0, autoOffY = 1, autoOffsetCalibrated = false, autoOffsetLastT = null;
+const AUTO_CAL_MAX_TURN_DEG_S = 3;  // learn only on a steady course: GPS course lags in turns
+const AUTO_CAL_MIN_SAMPLES = 20;    // first samples form a plain average, not one sample
+
+// The learned offset (mounting angle + declination + deviation) is kept across
+// reloads: the phone usually sits in the same mount, so the compass is right
+// from the first minute instead of after a few minutes under way.
+let autoOffX = 0, autoOffY = 1, autoOffsetCalibrated = false, autoOffsetLastT = null, autoOffsetSamples = 0;
 function autoOffsetDeg() {
   return toDeg(Math.atan2(autoOffX, autoOffY));
+}
+function restoreAutoOffset() {
+  if (state.autoOffsetSaved == null) return;
+  autoOffX = Math.sin(toRad(state.autoOffsetSaved));
+  autoOffY = Math.cos(toRad(state.autoOffsetSaved));
+  autoOffsetCalibrated = true;
+  autoOffsetSamples = AUTO_CAL_MIN_SAMPLES;
 }
 
 function compassIsFresh() {
@@ -2085,18 +2153,33 @@ function compassIsFresh() {
     && performance.now() - compassLastT < AUTO_COMPASS_MAX_AGE_MS;
 }
 
+let autoCalPrev = null;
 function learnAutoOffset(gpsHdg) {
   if (!compassIsFresh()) return;
   const now = performance.now();
-  const diff = toRad(normalizeSigned(gpsHdg - (state.rawCompassHeading + state.headingOffsetDeg)));
-  let a = 1;
-  if (autoOffsetCalibrated && autoOffsetLastT != null) {
-    a = 1 - Math.exp(-Math.min(5, (now - autoOffsetLastT) / 1000) / AUTO_OFFSET_TAU_S);
-  }
+  const compass = state.rawCompassHeading + state.headingOffsetDeg;
+  const prev = autoCalPrev;
+  autoCalPrev = { t: now, compass, gps: gpsHdg };
+  if (!prev) return;
+  const dt = (now - prev.t) / 1000;
+  if (dt <= 0 || dt > 5) return;
+  const turning = Math.abs(normalizeSigned(compass - prev.compass)) / dt > AUTO_CAL_MAX_TURN_DEG_S
+    || Math.abs(normalizeSigned(gpsHdg - prev.gps)) / dt > AUTO_CAL_MAX_TURN_DEG_S;
+  if (turning) return;
+
+  const diff = toRad(normalizeSigned(gpsHdg - compass));
+  autoOffsetSamples++;
+  const a = autoOffsetSamples <= AUTO_CAL_MIN_SAMPLES
+    ? 1 / autoOffsetSamples
+    : 1 - Math.exp(-Math.min(5, (now - autoOffsetLastT) / 1000) / AUTO_OFFSET_TAU_S);
   autoOffX += a * (Math.sin(diff) - autoOffX);
   autoOffY += a * (Math.cos(diff) - autoOffY);
-  autoOffsetCalibrated = true;
+  autoOffsetCalibrated = autoOffsetSamples >= AUTO_CAL_MIN_SAMPLES;
   autoOffsetLastT = now;
+  if (autoOffsetCalibrated && autoOffsetSamples % 30 === 0) {
+    state.autoOffsetSaved = autoOffsetDeg();
+    saveSettings();
+  }
 }
 
 function updateAutoHeading() {
@@ -2104,7 +2187,7 @@ function updateAutoHeading() {
   const gps = state.lastGpsCourse && Date.now() - state.lastGpsCourse.t < AUTO_GPS_COURSE_MAX_AGE_MS
     ? state.lastGpsCourse.hdg : null;
   const compass = compassIsFresh()
-    ? (state.rawCompassHeading + state.headingOffsetDeg + autoOffsetDeg() + 720) % 360 : null;
+    ? (state.rawCompassHeading + state.headingOffsetDeg + (autoOffsetCalibrated ? autoOffsetDeg() : 0) + 720) % 360 : null;
   let result = null;
   if (compass != null && gps != null) {
     const w = clamp(((state.currentSpeedMs || 0) - AUTO_LOW_SPEED_MS) / (AUTO_HIGH_SPEED_MS - AUTO_LOW_SPEED_MS), 0, 1);
@@ -2124,14 +2207,32 @@ function updateAutoHeading() {
 // upright on a mount it reads garbage. Uses the horizontal direction of the
 // phone's back (upright) or top edge (flat), whichever is better defined -
 // they agree in the tilt range where the choice flips, so no jump.
+function screenAngleDeg() {
+  return (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
+}
+
 function tiltCompensatedHeading(alphaDeg, betaDeg, gammaDeg) {
   const cA = Math.cos(toRad(alphaDeg)), sA = Math.sin(toRad(alphaDeg));
   const cB = Math.cos(toRad(betaDeg)), sB = Math.sin(toRad(betaDeg));
   const cG = Math.cos(toRad(gammaDeg)), sG = Math.sin(toRad(gammaDeg));
   const backE = -(cA * sG + sA * sB * cG), backN = cA * sB * cG - sA * sG;
-  const topE = -sA * cB, topN = cA * cB;
+  // "Forward" of a phone lying flat is the top of the *screen*, which in
+  // landscape is a side edge of the device: rotate the device axes by the
+  // screen angle, otherwise the heading is 90° off in landscape.
+  const a = toRad(screenAngleDeg()), sa = Math.sin(a), ca = Math.cos(a);
+  const topE = sa * (cA * cG - sA * sB * sG) + ca * (-sA * cB);
+  const topN = sa * (cG * sA + cA * sB * sG) + ca * (cA * cB);
   const [e, n] = Math.hypot(backE, backN) >= Math.hypot(topE, topN) ? [backE, backN] : [topE, topN];
   return (toDeg(Math.atan2(e, n)) + 360) % 360;
+}
+
+function onCompassRaw(compassRaw) {
+  state.rawCompassHeading = smoothCompassHeading(compassRaw, performance.now());
+  if (state.headingSource === 'compass') {
+    state.lastHeading = (state.rawCompassHeading + state.headingOffsetDeg + 360) % 360;
+  } else if (state.headingSource === 'auto') {
+    updateAutoHeading();
+  }
 }
 
 function onDeviceOrientation(e) {
@@ -2140,20 +2241,46 @@ function onDeviceOrientation(e) {
       ? state.rawGamma + HEEL_SMOOTHING_ALPHA * (e.gamma - state.rawGamma)
       : e.gamma;
   }
+  if (nativeCompass) return;  // the app's own compass is better; don't mix the two
 
   let compassRaw = null;
   if (e.webkitCompassHeading != null) compassRaw = e.webkitCompassHeading;
   else if (e.absolute && e.alpha != null && e.beta != null && e.gamma != null) {
     compassRaw = tiltCompensatedHeading(e.alpha, e.beta, e.gamma);
   }
-  if (compassRaw != null) {
-    state.rawCompassHeading = smoothCompassHeading(compassRaw, performance.now());
-    if (state.headingSource === 'compass') {
-      state.lastHeading = (state.rawCompassHeading + state.headingOffsetDeg + 360) % 360;
-    } else if (state.headingSource === 'auto') {
-      updateAutoHeading();
-    }
+  if (compassRaw != null) onCompassRaw(compassRaw);
+}
+
+// ---- native compass (StartGun 2 app) ----
+// Android's fused rotation-vector sensor, read natively: tilt-compensated,
+// already corrected for magnetic declination at the GPS position (so it is a
+// TRUE heading, like the GPS course), and it reports the magnetometer's
+// calibration state, which the browser never exposes.
+const NATIVE_COMPASS_POLL_MS = 100;
+let nativeCompass = null;
+function startNativeCompass() {
+  nativeCompass = { status: null, warned: false };
+  setInterval(() => {
+    let c = null;
+    try { c = JSON.parse(window.StartGunCompass.read()); } catch (err) { return; }
+    nativeCompass.status = c;
+    if (c.h != null) onCompassRaw((c.h + (c.decl || 0) + 360) % 360);
+    renderCompassStatus();
+  }, NATIVE_COMPASS_POLL_MS);
+}
+function renderCompassStatus() {
+  const c = nativeCompass && nativeCompass.status;
+  if (!c || c.h == null) { el.compassLabel.textContent = ''; return; }
+  const needsCal = c.cal != null && c.cal <= 1;
+  el.compassLabel.textContent = needsCal
+    ? 'КОМПАС: КАЛИБРОВКА!'
+    : `компас${c.acc != null ? ` ±${Math.round(c.acc)}°` : ''}`;
+  el.compassLabel.classList.toggle('warn', needsCal);
+  if (needsCal && !nativeCompass.warned) {
+    nativeCompass.warned = true;
+    showToast('Компас не откалиброван: покрутите телефон восьмёркой в воздухе');
   }
+  if (!needsCal) nativeCompass.warned = false;
 }
 
 async function enableOrientationSensor() {
@@ -3325,11 +3452,13 @@ window.addEventListener('pagehide', saveCurrentSessionNow);
 
 loadSettings();
 applySettingsToUi();
+restoreAutoOffset();
 state.sessionId = makeSessionId();
 refreshLogPanel();
 renderPreset();
 syncPageFromHash();
 initGeo();
+if (window.StartGunCompass) startNativeCompass();
 if (state.headingSource !== 'gps') {
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     document.addEventListener('click', () => enableOrientationSensor(), { once: true });
