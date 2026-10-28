@@ -18,12 +18,14 @@ android {
 
     signingConfigs {
         release {
-            // Created once by the CI workflow and kept in the repo, so every new
-            // build installs as an update over the previous one.
-            storeFile rootProject.file('keystore/startgun.keystore')
-            storePassword 'startgun'
-            keyAlias 'startgun'
-            keyPassword 'startgun'
+            // The key lives only in the repository secrets; the CI workflow
+            // decodes it to a temp file and passes these variables. Same key
+            // every build, so a new APK installs as an update.
+            storeFile file(System.getenv('STARTGUN_KEYSTORE') ?: 'missing-keystore.p12')
+            storeType 'pkcs12'
+            storePassword System.getenv('STARTGUN_KEYSTORE_PASSWORD')
+            keyAlias System.getenv('STARTGUN_KEY_ALIAS')
+            keyPassword System.getenv('STARTGUN_KEYSTORE_PASSWORD')
         }
     }
 
