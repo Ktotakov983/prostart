@@ -1512,7 +1512,71 @@ function distUnitLabel() {
   return state.distUnit === 'ft' ? 'ft' : 'm';
 }
 
+// ---- native GPS (StartGun 2 app) ----
+// Inside the StartGun 2 Android app GPS comes from a foreground service: the
+// satellite receiver itself (no Wi-Fi/cell blending), full GNSS tracking, speed
+// accuracy and satellite counts, and it keeps recording with the screen off.
+// Fixes are buffered natively and drained here; after the screen comes back
+// on, the backlog is replayed in order, so the track has no hole.
+const NATIVE_POLL_MS = 250;
+const NATIVE_START_RETRY_MS = 5000;
+let nativeGps = null;
+
+function startNativeGps() {
+  nativeGps = { lastStartTry: 0, status: null };
+  window.__onStartGunGpsReady = () => { nativeGps.lastStartTry = 0; pollNativeGps(); };
+  el.gpsLabel.textContent = 'GPS...';
+  setInterval(pollNativeGps, NATIVE_POLL_MS);
+  pollNativeGps();
+}
+
+function pollNativeGps() {
+  const now = Date.now();
+  try { nativeGps.status = JSON.parse(window.StartGunGps.status()); } catch (err) { nativeGps.status = null; }
+  if ((!nativeGps.status || !nativeGps.status.running) && now - nativeGps.lastStartTry > NATIVE_START_RETRY_MS) {
+    nativeGps.lastStartTry = now;
+    let started = false;
+    try { started = window.StartGunGps.start(); } catch (err) {}
+    if (!started) el.gpsLabel.textContent = 'GPS: нужно разрешение';
+  }
+  let fixes = [];
+  try { fixes = JSON.parse(window.StartGunGps.drain()); } catch (err) {}
+  if (!fixes.length) return;
+  state.replaying = fixes.length > 1;
+  for (const f of fixes) {
+    onPosition({
+      coords: { latitude: f.lat, longitude: f.lon, accuracy: f.acc, speed: f.spd },
+      timestamp: f.t,
+      speedAccuracy: f.sacc,
+      sats: f.su >= 0 ? { used: f.su, visible: f.sv } : null,
+    });
+  }
+  if (state.replaying) {
+    state.replaying = false;
+    refreshLogPanel();
+    if (fixes.length > 5) showToast(`Догружено ${fixes.length} точек, записанных при выключенном экране`);
+  }
+}
+
+// Fix rate over the last 10 s: shows at once when the phone starts skipping
+// seconds to save battery.
+const fixTimes = [];
+function noteFixRate(t) {
+  fixTimes.push(t);
+  while (fixTimes.length && fixTimes[0] < t - 10000) fixTimes.shift();
+  if (fixTimes.length < 2) return null;
+  return (fixTimes.length - 1) / ((fixTimes[fixTimes.length - 1] - fixTimes[0]) / 1000);
+}
+
+function gpsStatusLabel(accuracy, hz, sats) {
+  const parts = [`GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м`];
+  if (hz != null) parts.push(`${hz.toFixed(1)} Гц`);
+  if (sats) parts.push(`${sats.used}/${sats.visible} сп.`);
+  return parts.join(' · ');
+}
+
 function initGeo() {
+  if (window.StartGunGps) { startNativeGps(); return; }
   const diag = [];
   diag.push(`Адрес: ${location.href}`);
   diag.push(`Протокол: ${location.protocol}`);
@@ -1624,7 +1688,7 @@ function kfOutput(f) {
 
 // Feeds one fix; returns the filtered {lat, lon, speedMs, cogDeg}, or null when
 // the fix was rejected as a glitch.
-function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t) {
+function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t, dopplerSigma) {
   if (!gpsKf.ref) gpsKf.ref = { lat, lon };
   const p = project(lat, lon, gpsKf.ref.lat, gpsKf.ref.lon);
   const posSigma = Math.max(KF_MIN_POS_SIGMA, (accuracy || 10) / 1.5);
@@ -1675,7 +1739,9 @@ function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t) {
   if (dopplerMs != null) {
     const s = Math.hypot(f.X[2], f.X[3]);
     if (s > 0.3) {
-      const inn = kfInnovation(f, [0, 0, f.X[2] / s, f.X[3] / s], dopplerMs, KF_DOPPLER_SIGMA * KF_DOPPLER_SIGMA);
+      // The native app reports the receiver's own speed accuracy; the browser doesn't.
+      const sigma = dopplerSigma != null ? clamp(dopplerSigma, 0.2, 1.5) : KF_DOPPLER_SIGMA;
+      const inn = kfInnovation(f, [0, 0, f.X[2] / s, f.X[3] / s], dopplerMs, sigma * sigma);
       if (Math.abs(inn.y) <= KF_DOPPLER_GATE * Math.sqrt(inn.S)) kfApply(f, inn);
       else gpsKf.rejectedTotal++;
     }
@@ -1704,10 +1770,11 @@ function onPosition(pos) {
 
   el.gpsDot.classList.add('active');
   state.lastGoodFixAt = Date.now();
-  el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м`;
+  const fixHz = noteFixRate(t);
+  el.gpsLabel.textContent = gpsStatusLabel(accuracy, fixHz, pos.sats);
 
   const rawSpeedMs = (speed != null && !isNaN(speed)) ? speed : null;
-  const filt = gpsFilterUpdate(lat, lon, accuracy, rawSpeedMs, t);
+  const filt = gpsFilterUpdate(lat, lon, accuracy, rawSpeedMs, t, pos.speedAccuracy);
   if (!filt) {
     el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м · выброс`;
     return;
@@ -1738,6 +1805,9 @@ function onPosition(pos) {
     `Secure context: да\n` +
     `Точность: ±${accuracy != null ? accuracy.toFixed(0) : '?'} м\n` +
     `Координаты: ${lat.toFixed(6)}, ${lon.toFixed(6)}\n` +
+    `Источник: ${nativeGps ? 'спутниковый приёмник (StartGun 2, пишет и при выключенном экране)' : 'браузер (только при включённом экране)'}\n` +
+    (nativeGps && nativeGps.status ? `Полное отслеживание GNSS: ${nativeGps.status.fullTracking ? 'да' : 'нет (Android < 12)'}\n` : '') +
+    `Частота: ${fixHz != null ? fixHz.toFixed(2) + ' Гц' : '—'}${pos.sats ? ` · спутники ${pos.sats.used} в решении / ${pos.sats.visible} видно` : ''}\n` +
     `Скорость: ${speedMs.toFixed(2)} м/с (сырая GPS: ${rawSpeedMs != null ? rawSpeedMs.toFixed(2) : 'нет'})\n` +
     `Отброшено выбросов: ${gpsKf.rejectedTotal}\n` +
     `Курс: ${state.lastHeading != null ? state.lastHeading.toFixed(0) + '°' : '--'}` +
@@ -1755,7 +1825,7 @@ function onPosition(pos) {
       state.log = [];
     }
     state.log.push({ t, lat: filt.lat, lon: filt.lon, speedMs, hdg: state.lastHeading, acc: accuracy, rawSpeedMs });
-    refreshLogPanel();
+    if (!state.replaying) refreshLogPanel();
     if (!state.sessionRegistered) ensureCurrentSessionRegistered(t);
     else scheduleSessionSave();
   }
