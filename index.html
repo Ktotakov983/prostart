@@ -1147,6 +1147,13 @@ function project(lat, lon, refLat, refLon) {
   return { x, y };
 }
 
+function unproject(x, y, refLat, refLon) {
+  return {
+    lat: refLat + toDeg(y / EARTH_R),
+    lon: refLon + toDeg(x / (EARTH_R * Math.cos(toRad(refLat)))),
+  };
+}
+
 function bearingXY(dx, dy) {
   return (toDeg(Math.atan2(dx, dy)) + 360) % 360;
 }
@@ -1341,11 +1348,15 @@ function packLog(log) {
       Math.round((p.t - t0) / 100) / 10, +p.lat.toFixed(6), +p.lon.toFixed(6),
       +p.speedMs.toFixed(2), p.hdg != null ? Math.round(p.hdg) : null,
       p.acc != null ? Math.round(p.acc) : null,
+      p.rawSpeedMs != null ? +p.rawSpeedMs.toFixed(2) : null,
     ]),
   };
 }
 function unpackLog(packed) {
-  return packed.pts.map(a => ({ t: packed.t0 + a[0] * 1000, lat: a[1], lon: a[2], speedMs: a[3], hdg: a[4], acc: a[5] }));
+  return packed.pts.map(a => ({
+    t: packed.t0 + a[0] * 1000, lat: a[1], lon: a[2], speedMs: a[3], hdg: a[4], acc: a[5],
+    rawSpeedMs: a[6] != null ? a[6] : null,
+  }));
 }
 function loadSessionFull(id) {
   try {
@@ -1548,13 +1559,136 @@ function onGeoError(err) {
   showToast('GPS: ' + err.message);
 }
 
+// ---- GPS filter ----
+// Phone GPS reports position (±3-10 m) and Doppler speed (±0.3-0.5 m/s, worse
+// at low speed) independently every ~1 s, plus occasional glitches. Used raw,
+// speed jumps by 1-2 kn between seconds - physically impossible for a sailing
+// boat. A Kalman filter with a constant-velocity model fuses both: state
+// [x, y, vx, vy] in metres east/north of the first fix; the process noise is a
+// bounded random acceleration (KF_ACCEL_SIGMA), so the estimate can only change
+// as fast as a boat can accelerate. Fixes and speeds far outside the predicted
+// uncertainty are rejected as glitches.
+const KF_ACCEL_SIGMA = 0.1;       // m/s², 1σ acceleration of a dinghy/keelboat in gusts
+const KF_MAX_ACCEL = 0.5;         // m/s², hard limit: 0 → 5 kn takes at least ~5 s
+const KF_DOPPLER_SIGMA = 0.6;     // m/s, 1σ of the phone's Doppler speed
+const KF_DOPPLER_GATE = 3;        // Doppler readings further than this many σ off are glitches
+const KF_MIN_POS_SIGMA = 2;       // m, floor for the per-axis position error
+const KF_RESET_GAP_S = 30;        // longer signal gap → start the filter afresh
+const KF_GATE_SIGMA = 5;          // reject a measurement this many σ off the prediction
+const KF_GATE_MIN_JUMP_M = 10;    // ...but never reject position jumps smaller than this
+const KF_MAX_REJECTS = 3;         // that many rejects in a row → trust GPS, reset
+
+const gpsKf = { ref: null, f: null, rejects: 0, rejectedTotal: 0 };
+
+function kfNew(x, y, t, posVar) {
+  return {
+    X: [x, y, 0, 0],
+    P: [[posVar, 0, 0, 0], [0, posVar, 0, 0], [0, 0, 4, 0], [0, 0, 0, 4]],
+    t,
+  };
+}
+
+function kfPredict(f, dt) {
+  const X = f.X, P = f.P;
+  X[0] += X[2] * dt;
+  X[1] += X[3] * dt;
+  // P = F·P·Fᵀ + Q, F = [[1,0,dt,0],[0,1,0,dt],[0,0,1,0],[0,0,0,1]]
+  const FP = P.map((row, i) => (i < 2 ? row.map((v, j) => v + dt * P[i + 2][j]) : row.slice()));
+  const N = FP.map(row => [row[0] + dt * row[2], row[1] + dt * row[3], row[2], row[3]]);
+  const q = KF_ACCEL_SIGMA * KF_ACCEL_SIGMA, dt2 = dt * dt;
+  const q11 = q * dt2 * dt2 / 4, q12 = q * dt2 * dt / 2, q22 = q * dt2;
+  N[0][0] += q11; N[0][2] += q12; N[2][0] += q12; N[2][2] += q22;
+  N[1][1] += q11; N[1][3] += q12; N[3][1] += q12; N[3][3] += q22;
+  f.P = N;
+}
+
+// Scalar measurement z = H·X + noise(R). Returns the innovation and its
+// variance; kfApply then folds it in. P is symmetric, so H·P = (P·Hᵀ)ᵀ.
+function kfInnovation(f, H, z, R) {
+  const PHt = f.P.map(row => row[0] * H[0] + row[1] * H[1] + row[2] * H[2] + row[3] * H[3]);
+  const hx = H[0] * f.X[0] + H[1] * f.X[1] + H[2] * f.X[2] + H[3] * f.X[3];
+  const S = H[0] * PHt[0] + H[1] * PHt[1] + H[2] * PHt[2] + H[3] * PHt[3] + R;
+  return { y: z - hx, S, PHt };
+}
+function kfApply(f, inn) {
+  const K = inn.PHt.map(v => v / inn.S);
+  for (let i = 0; i < 4; i++) f.X[i] += K[i] * inn.y;
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) f.P[i][j] -= K[i] * inn.PHt[j];
+}
+
+function kfOutput(f) {
+  const ll = unproject(f.X[0], f.X[1], gpsKf.ref.lat, gpsKf.ref.lon);
+  const speedMs = Math.hypot(f.X[2], f.X[3]);
+  return { lat: ll.lat, lon: ll.lon, speedMs, cogDeg: speedMs > 0.2 ? bearingXY(f.X[2], f.X[3]) : null };
+}
+
+// Feeds one fix; returns the filtered {lat, lon, speedMs, cogDeg}, or null when
+// the fix was rejected as a glitch.
+function gpsFilterUpdate(lat, lon, accuracy, dopplerMs, t) {
+  if (!gpsKf.ref) gpsKf.ref = { lat, lon };
+  const p = project(lat, lon, gpsKf.ref.lat, gpsKf.ref.lon);
+  const posSigma = Math.max(KF_MIN_POS_SIGMA, (accuracy || 10) / 1.5);
+  const posVar = posSigma * posSigma;
+  let f = gpsKf.f;
+
+  if (!f || (t - f.t) / 1000 > KF_RESET_GAP_S) {
+    f = gpsKf.f = kfNew(p.x, p.y, t, posVar);
+    gpsKf.rejects = 0;
+    if (dopplerMs != null) { f.P[2][2] = f.P[3][3] = 1; }
+    return kfOutput(f);
+  }
+  const dt = (t - f.t) / 1000;
+  if (dt <= 0) return kfOutput(f);
+  const vBefore = [f.X[2], f.X[3]];
+  kfPredict(f, dt);
+  f.t = t;
+  // However the measurements pull, the velocity can't change faster than a
+  // boat accelerates or brakes.
+  const limitAccel = () => {
+    const dvx = f.X[2] - vBefore[0], dvy = f.X[3] - vBefore[1], dv = Math.hypot(dvx, dvy);
+    const maxDv = KF_MAX_ACCEL * dt;
+    if (dv > maxDv) {
+      f.X[2] = vBefore[0] + dvx * maxDv / dv;
+      f.X[3] = vBefore[1] + dvy * maxDv / dv;
+    }
+  };
+
+  // Position: gate on the 2-D innovation before applying either axis.
+  const ix = kfInnovation(f, [1, 0, 0, 0], p.x, posVar);
+  const iy = kfInnovation(f, [0, 1, 0, 0], p.y, posVar);
+  const d2 = ix.y * ix.y / ix.S + iy.y * iy.y / iy.S;
+  if (d2 > KF_GATE_SIGMA * KF_GATE_SIGMA * 2 && Math.hypot(ix.y, iy.y) > KF_GATE_MIN_JUMP_M) {
+    gpsKf.rejectedTotal++;
+    if (++gpsKf.rejects >= KF_MAX_REJECTS) {
+      gpsKf.f = kfNew(p.x, p.y, t, posVar);
+      gpsKf.rejects = 0;
+      return kfOutput(gpsKf.f);
+    }
+    return null;
+  }
+  gpsKf.rejects = 0;
+  kfApply(f, ix);
+  kfApply(f, kfInnovation(f, [0, 1, 0, 0], p.y, posVar));
+
+  // Doppler speed: measures |v|, linearised around the current velocity. Below
+  // ~0.3 m/s the direction is undefined, there the positions carry it.
+  if (dopplerMs != null) {
+    const s = Math.hypot(f.X[2], f.X[3]);
+    if (s > 0.3) {
+      const inn = kfInnovation(f, [0, 0, f.X[2] / s, f.X[3] / s], dopplerMs, KF_DOPPLER_SIGMA * KF_DOPPLER_SIGMA);
+      if (Math.abs(inn.y) <= KF_DOPPLER_GATE * Math.sqrt(inn.S)) kfApply(f, inn);
+      else gpsKf.rejectedTotal++;
+    }
+  }
+  limitAccel();
+  return kfOutput(f);
+}
+
 const GPS_MAX_ACCEPTABLE_ACCURACY_M = 60;
 const GPS_MIN_SPEED_FOR_HEADING_MS = 0.35;
-const GPS_MIN_DISPLACEMENT_FOR_HEADING_M = 1.5;
-const GPS_SPEED_SMOOTHING_ALPHA = 0.35;
 
 function onPosition(pos) {
-  const { latitude: lat, longitude: lon, speed, heading, accuracy } = pos.coords;
+  const { latitude: lat, longitude: lon, speed, accuracy } = pos.coords;
   const t = pos.timestamp || Date.now();
   state.lastAccuracy = accuracy;
 
@@ -1572,21 +1706,14 @@ function onPosition(pos) {
   state.lastGoodFixAt = Date.now();
   el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м`;
 
-  let speedMs = (speed != null && !isNaN(speed)) ? speed : 0;
-  let hdg = (heading != null && !isNaN(heading)) ? heading : null;
-
-  if (state.lastPos) {
-    const dt = (t - state.lastPos.t) / 1000;
-    if (dt > 0.1) {
-      const ref = state.pin || state.lastPos;
-      const p0 = project(state.lastPos.lat, state.lastPos.lon, ref.lat, ref.lon);
-      const p1 = project(lat, lon, ref.lat, ref.lon);
-      const dx = p1.x - p0.x, dy = p1.y - p0.y;
-      const dist = Math.hypot(dx, dy);
-      if (speed == null || isNaN(speed)) speedMs = dist / dt;
-      if (hdg == null && dist > GPS_MIN_DISPLACEMENT_FOR_HEADING_M) hdg = bearingXY(dx, dy);
-    }
+  const rawSpeedMs = (speed != null && !isNaN(speed)) ? speed : null;
+  const filt = gpsFilterUpdate(lat, lon, accuracy, rawSpeedMs, t);
+  if (!filt) {
+    el.gpsLabel.textContent = `GPS ±${accuracy != null ? accuracy.toFixed(0) : '?'}м · выброс`;
+    return;
   }
+  const speedMs = filt.speedMs;
+  const hdg = filt.cogDeg;
 
   if (state.headingSource === 'gps' && hdg != null && speedMs >= GPS_MIN_SPEED_FOR_HEADING_MS) {
     state.lastHeading = hdg;
@@ -1596,11 +1723,8 @@ function onPosition(pos) {
     if (speedMs >= AUTO_CAL_MIN_SPEED_MS) learnAutoOffset(hdg);
   }
 
-  state.lastPos = { lat, lon, t };
-
-  state.currentSpeedMs = state.currentSpeedMs != null
-    ? state.currentSpeedMs + GPS_SPEED_SMOOTHING_ALPHA * (speedMs - state.currentSpeedMs)
-    : speedMs;
+  state.lastPos = { lat: filt.lat, lon: filt.lon, t };
+  state.currentSpeedMs = speedMs;
 
   updateAutoHeading();
 
@@ -1614,7 +1738,8 @@ function onPosition(pos) {
     `Secure context: да\n` +
     `Точность: ±${accuracy != null ? accuracy.toFixed(0) : '?'} м\n` +
     `Координаты: ${lat.toFixed(6)}, ${lon.toFixed(6)}\n` +
-    `Скорость (сырая): ${speedMs.toFixed(2)} м/с\n` +
+    `Скорость: ${speedMs.toFixed(2)} м/с (сырая GPS: ${rawSpeedMs != null ? rawSpeedMs.toFixed(2) : 'нет'})\n` +
+    `Отброшено выбросов: ${gpsKf.rejectedTotal}\n` +
     `Курс: ${state.lastHeading != null ? state.lastHeading.toFixed(0) + '°' : '--'}` +
     (state.headingSource === 'auto'
       ? `\nАвто-курс: поправка компаса ${autoOffsetCalibrated ? autoOffsetDeg().toFixed(0) + '° (откалибрована по GPS)' : 'ещё не откалибрована (нужно идти на скорости > 3 уз)'}`
@@ -1629,7 +1754,7 @@ function onPosition(pos) {
       state.sessionRegistered = false;
       state.log = [];
     }
-    state.log.push({ t, lat, lon, speedMs, hdg: state.lastHeading, acc: accuracy });
+    state.log.push({ t, lat: filt.lat, lon: filt.lon, speedMs, hdg: state.lastHeading, acc: accuracy, rawSpeedMs });
     refreshLogPanel();
     if (!state.sessionRegistered) ensureCurrentSessionRegistered(t);
     else scheduleSessionSave();
@@ -2225,11 +2350,16 @@ function drawHistoryChart() {
     return;
   }
 
-  const rawSpeeds = points.map(p => speedFromMs(p.speedMs));
-  // Phone GPS speed jumps ±0.5 kn from second to second and drops to 0 now and
-  // then, so the main line is a centred 10-second moving average; the raw
-  // samples stay underneath as a faint line.
-  const speeds = smoothByTime(points, medianFilter(rawSpeeds, 5), CHART_SMOOTH_WINDOW_MS);
+  // Records made with the GPS filter store the filtered speed (main line) and
+  // the phone's raw Doppler speed (faint line). Older records only have the
+  // raw speed, so for them the main line is smoothed here instead.
+  const filtered = points.some(p => p.rawSpeedMs != null);
+  const rawSpeeds = filtered
+    ? points.map(p => speedFromMs(p.rawSpeedMs != null ? p.rawSpeedMs : p.speedMs))
+    : points.map(p => speedFromMs(p.speedMs));
+  const speeds = filtered
+    ? points.map(p => speedFromMs(p.speedMs))
+    : smoothByTime(points, medianFilter(rawSpeeds, 5), CHART_SMOOTH_WINDOW_MS);
   const maxSpeed = Math.max(1, ...speeds) * 1.1;
   const t0 = points[0].t;
   const tSpan = Math.max(1000, points[points.length - 1].t - t0);
@@ -2493,12 +2623,15 @@ function sessionFileBase(view) {
 
 function sessionToCsv(view) {
   const startT = view.raceStartEpoch;
-  const header = 'time_iso,lat,lon,speed_ms,speed_kn,heading_deg,accuracy_m,race_time_s\n';
+  // speed_* are filtered values; gps_raw_speed_kn is the phone's unfiltered
+  // Doppler speed (empty for records made before the filter existed).
+  const header = 'time_iso,lat,lon,speed_ms,speed_kn,heading_deg,accuracy_m,race_time_s,gps_raw_speed_kn\n';
   const rows = view.log.map(p => [
     new Date(p.t).toISOString(), p.lat.toFixed(6), p.lon.toFixed(6),
     p.speedMs.toFixed(2), (p.speedMs * 1.9438444924).toFixed(2),
     p.hdg != null ? Math.round(p.hdg) : '', p.acc != null ? Math.round(p.acc) : '',
     startT != null ? Math.round((p.t - startT) / 1000) : '',
+    p.rawSpeedMs != null ? (p.rawSpeedMs * 1.9438444924).toFixed(2) : '',
   ].join(',')).join('\n');
   return header + rows + '\n';
 }
